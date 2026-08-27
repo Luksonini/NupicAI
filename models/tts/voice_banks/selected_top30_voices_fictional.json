@@ -1,0 +1,276 @@
+{
+  "source": "test_paraqueet/wegorz_dubbingTTS/voice_banks/voice_selection_all/selected_top_voices.pt",
+  "output": "test_paraqueet/wegorz_dubbingTTS/stronka/dubbing/models/tts/voice_banks/selected_top30_voices_fictional.pt",
+  "voices": [
+    {
+      "speaker_id": 108080,
+      "rank": 1,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Anna Nowak",
+      "original_speaker_name": "8080",
+      "quality": 0.9894523076923077
+    },
+    {
+      "speaker_id": 104860,
+      "rank": 1,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Jan Nowak",
+      "original_speaker_name": "4860",
+      "quality": 0.9898953846153846
+    },
+    {
+      "speaker_id": 100087,
+      "rank": 2,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Maria Kaczmarek",
+      "original_speaker_name": "87",
+      "quality": 0.9879015384615385
+    },
+    {
+      "speaker_id": 106686,
+      "rank": 2,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Piotr Kaczmarek",
+      "original_speaker_name": "6686",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 103008,
+      "rank": 3,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Zofia Król",
+      "original_speaker_name": "3008",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 108875,
+      "rank": 3,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Marek Król",
+      "original_speaker_name": "8875",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 100636,
+      "rank": 4,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Ewa Sadowska",
+      "original_speaker_name": "636",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 103032,
+      "rank": 4,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Adam Sadowski",
+      "original_speaker_name": "3032",
+      "quality": 0.9887876923076924
+    },
+    {
+      "speaker_id": 103482,
+      "rank": 5,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Katarzyna Urbańska",
+      "original_speaker_name": "3482",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 101777,
+      "rank": 5,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Tomasz Urbański",
+      "original_speaker_name": "1777",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 100322,
+      "rank": 6,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Magdalena Lewandowska",
+      "original_speaker_name": "322",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 106395,
+      "rank": 6,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Michał Lewandowski",
+      "original_speaker_name": "6395",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 102053,
+      "rank": 7,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Julia Pawlak",
+      "original_speaker_name": "2053",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 107558,
+      "rank": 7,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Paweł Pawlak",
+      "original_speaker_name": "7558",
+      "quality": 0.9896738461538461
+    },
+    {
+      "speaker_id": 105723,
+      "rank": 8,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Marta Duda",
+      "original_speaker_name": "5723",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 100119,
+      "rank": 8,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Kamil Duda",
+      "original_speaker_name": "119",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 103630,
+      "rank": 9,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Natalia Czarnecka",
+      "original_speaker_name": "3630",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 104859,
+      "rank": 9,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Mateusz Czarnecki",
+      "original_speaker_name": "4859",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 101382,
+      "rank": 10,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Karolina Zielińska",
+      "original_speaker_name": "1382",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 105868,
+      "rank": 10,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Łukasz Zieliński",
+      "original_speaker_name": "5868",
+      "quality": 0.988123076923077
+    },
+    {
+      "speaker_id": 108228,
+      "rank": 11,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Alicja Piotrowska",
+      "original_speaker_name": "8228",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 107190,
+      "rank": 11,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Artur Piotrowski",
+      "original_speaker_name": "7190",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 105561,
+      "rank": 12,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Helena Sikora",
+      "original_speaker_name": "5561",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 103664,
+      "rank": 12,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Robert Sikora",
+      "original_speaker_name": "3664",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 101390,
+      "rank": 13,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Joanna Chmielewska",
+      "original_speaker_name": "1390",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 101355,
+      "rank": 13,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Marcin Chmielewski",
+      "original_speaker_name": "1355",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 107717,
+      "rank": 14,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Monika Kowalska",
+      "original_speaker_name": "7717",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 102499,
+      "rank": 14,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Dawid Kowalski",
+      "original_speaker_name": "2499",
+      "quality": 0.9883446153846154
+    },
+    {
+      "speaker_id": 100289,
+      "rank": 15,
+      "gender": "F",
+      "lang": "en",
+      "speaker_name": "Paulina Mazur",
+      "original_speaker_name": "289",
+      "quality": 0.9885661538461539
+    },
+    {
+      "speaker_id": 107226,
+      "rank": 15,
+      "gender": "M",
+      "lang": "en",
+      "speaker_name": "Filip Mazur",
+      "original_speaker_name": "7226",
+      "quality": 0.9883446153846154
+    }
+  ]
+}

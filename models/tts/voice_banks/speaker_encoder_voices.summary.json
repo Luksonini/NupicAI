@@ -1,0 +1,25 @@
+{
+  "out": "/home/rizos/Downloads/SalmonTTS2/test_paraqueet/wegorz_dubbingTTS/voice_banks/speaker_encoder_style_voices_lstm_styleadapters.pt",
+  "dataset_json": "/home/rizos/Downloads/SalmonTTS2/test_paraqueet/wegorz_dubbingTTS/data/manifest_mixed_plus_wolnelektury_5min__fcpe_f0.json",
+  "checkpoint": "/home/rizos/Downloads/SalmonTTS2/test_paraqueet/wegorz_dubbingTTS/src/experiments/runs_priorprosody/exp_fcpe_priorprosody_1k/chkpts/prior_mu_flow_spkprefix_dualhead_last.pt",
+  "encoder_source": "checkpoint:speaker_encoder",
+  "speaker_count": 1535,
+  "group_counts": {
+    "F": 758,
+    "M": 777,
+    "U": 0
+  },
+  "lang_gender_counts": {
+    "pl": {
+      "F": 213,
+      "M": 190,
+      "U": 0
+    },
+    "en": {
+      "F": 545,
+      "M": 587,
+      "U": 0
+    }
+  },
+  "error_count": 0
+}

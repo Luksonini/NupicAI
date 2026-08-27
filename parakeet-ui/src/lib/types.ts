@@ -1,0 +1,118 @@
+export interface Word {
+  word: string;
+  start: number;
+  end: number;
+  lang?: string;
+}
+
+export interface Segment {
+  index: number;
+  start: number;
+  end: number;
+  text: string;
+  source_text?: string;
+  words?: Word[];
+  translation?: string;
+}
+
+export interface TranscribeResult {
+  transcript: string;
+  words: Word[];
+  segments: Segment[];
+  detected_language: string;
+  language_counts: Record<string, number>;
+  duration: number;
+  word_count: number;
+  segment_count: number;
+  upload_path?: string;
+}
+
+export interface TranslateResult {
+  translation: string;
+  segments: Segment[];
+  source_lang: string;
+  target_lang: string;
+  model: string;
+  elapsed: number;
+}
+
+export interface DubResult {
+  audio_path: string;
+  duration: number;
+  transcribe_job_id: string;
+  segments?: Array<Record<string, unknown>>;
+  debug_log?: string;
+}
+
+export interface TTSToken {
+  token: string;
+  dur: number;
+  dur_sec: number;
+  is_pause: boolean;
+  allowed: boolean;
+  low: boolean;
+}
+
+export interface TTSChunk {
+  index: number;
+  text: string;
+  pred_sec: number | null;
+  mel_sec: number | null;
+  token_count: number;
+  tokens: TTSToken[];
+}
+
+export interface TTSResult {
+  audio_path: string;
+  duration: number;
+  chunks: TTSChunk[];
+  debug_log?: string;
+}
+
+export interface JobEvent {
+  type: 'progress' | 'done' | 'error';
+  progress?: number;
+  message?: string;
+  result?: TranscribeResult | TranslateResult | DubResult | TTSResult;
+  error?: string;
+}
+
+export type Step = 'idle' | 'transcribing' | 'transcribed' | 'translating' | 'translated' | 'error';
+
+export interface Speaker { label: string; id: number; }
+
+export interface TTSModelProfile {
+  key: string;
+  label: string;
+  description: string;
+  checkpoint: string;
+  default: boolean;
+  active: boolean;
+}
+
+export interface DubParams {
+  segments: Segment[];
+  speaker_label: string;
+  tts_model_profile: string;
+  transcribe_job_id: string;
+  target_lang: string;
+  base_speed: number;
+  max_adaptive_speed: number;
+  extra_tail_sec: number;
+  dur_scale: number;
+  mel_steps_first: number;
+  mel_steps_second: number;
+  mel_twopass_t_noise: number;
+  digital_silence: boolean;
+  pause_edge_frames: number;
+  short_continuity_ms: number;
+  emotion_group: string;
+  emotion_strength: number;
+}
+
+export const TRANSLATION_MODES = [
+  { value: 'qwen_mtp_35b_json_overlap', label: 'Qwen3.5 35B MTP JSON (domyślny)' },
+  { value: 'api_json_overlap', label: 'API JSON overlap' },
+  { value: 'api_numbered', label: 'API numbered batches' },
+  { value: 'wegorz_local_sentence_split', label: 'Lokalny Węgorz (EN→PL)' },
+] as const;

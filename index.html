@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Węgorz Dubbing Studio</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #22263a;
+  --border: #2e3350;
+  --accent: #6c8fff;
+  --accent-dim: #3a4e99;
+  --text: #e2e8f0;
+  --muted: #8892a4;
+  --green: #4ade80;
+  --red: #f87171;
+  --word-active: #fbbf24;
+  --seg-active-bg: #1e2a45;
+  --seg-active-border: var(--accent);
+  --radius: 10px;
+  --font: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  padding: 24px 16px 60px;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+.subtitle { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+
+/* ── Drop zone ── */
+#drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 16px;
+}
+#drop-zone:hover, #drop-zone.drag-over {
+  border-color: var(--accent);
+  background: #1a2040;
+}
+#drop-zone.has-file { border-style: solid; border-color: var(--accent-dim); }
+
+.drop-icon { font-size: 36px; margin-bottom: 10px; user-select: none; }
+.drop-label { color: var(--muted); font-size: 13px; }
+.drop-label strong { color: var(--accent); }
+
+#file-name {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#file-input { display: none; }
+
+/* ── Controls ── */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+button {
+  padding: 9px 20px;
+  border: none;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+#transcribe-btn {
+  background: var(--accent);
+  color: #fff;
+  flex-shrink: 0;
+}
+#transcribe-btn:not(:disabled):hover { background: #8aa3ff; }
+
+.btn-sm {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.btn-sm:not(:disabled):hover { background: var(--border); }
+
+#spinner {
+  width: 20px; height: 20px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#status { color: var(--muted); font-size: 13px; }
+#status.error { color: var(--red); }
+
+/* ── Results ── */
+#results { margin-top: 24px; }
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.result-header h2 { font-size: 16px; font-weight: 600; }
+
+#lang-badge {
+  background: var(--accent-dim);
+  color: #b8c8ff;
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+#stats { color: var(--muted); font-size: 12px; }
+
+/* ── Audio player ── */
+#audio-player {
+  width: 100%;
+  margin-bottom: 20px;
+  accent-color: var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* ── Tabs ── */
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 0; }
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 0;
+  margin-bottom: -1px;
+}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-btn:hover:not(.active) { color: var(--text); }
+
+.tab-panel { display: none; padding-top: 16px; }
+.tab-panel.active { display: block; }
+
+/* ── Transcript panel ── */
+#transcript-text {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ── Segments panel ── */
+#seg-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+#seg-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+#seg-list li:hover { background: var(--surface2); }
+#seg-list li.active {
+  background: var(--seg-active-bg);
+  border-color: var(--seg-active-border);
+}
+.seg-time {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding-top: 2px;
+  min-width: 40px;
+}
+.seg-text { color: var(--text); font-size: 14px; }
+
+/* ── Word timeline ── */
+#timeline-panel { overflow-x: auto; }
+
+#word-track-wrap {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  height: 44px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+#word-track {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  min-width: 600px;
+}
+.word-chip {
+  position: absolute;
+  top: 6px;
+  height: 32px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 32px;
+  padding: 0 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background 0.1s;
+  user-select: none;
+}
+.word-chip:hover { background: var(--border); }
+.word-chip.active {
+  background: var(--word-active);
+  color: #000;
+  border-color: var(--word-active);
+  z-index: 2;
+}
+
+.timeline-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* ── Export bar ── */
+.export-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+</style>
+</head>
+<body>
+
+<h1>Węgorz Dubbing Studio</h1>
+<p class="subtitle">Transkrypcja audio/video z word-level timestamps, tłumaczenie i dubbing TTS</p>
+
+<!-- Drop zone -->
+<div id="drop-zone">
+  <div class="drop-icon">🎙️</div>
+  <p>Przeciągnij plik audio lub wideo tutaj</p>
+  <p class="drop-label">lub <strong>kliknij aby wybrać</strong> · mp3 · wav · mp4 · mkv · m4a · flac · ogg</p>
+  <div id="file-name"></div>
+</div>
+<input type="file" id="file-input"
+  accept="audio/*,video/*,.mp3,.wav,.mp4,.mkv,.m4a,.flac,.ogg,.webm,.aac,.opus">
+
+<!-- Controls -->
+<div class="controls">
+  <button id="transcribe-btn" disabled>▶ Transkrybuj</button>
+  <div id="spinner" hidden></div>
+  <span id="status"></span>
+</div>
+
+<!-- Results -->
+<div id="results" hidden>
+  <div class="result-header">
+    <h2>Wyniki</h2>
+    <span id="lang-badge">?</span>
+    <span id="stats"></span>
+  </div>
+
+  <audio id="audio-player" controls hidden></audio>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="transcript">Transkrypcja</button>
+    <button class="tab-btn" data-tab="segments">Segmenty</button>
+    <button class="tab-btn" data-tab="timeline">Oś czasu</button>
+  </div>
+
+  <!-- Transcript panel -->
+  <div class="tab-panel active" id="tab-transcript">
+    <pre id="transcript-text"></pre>
+  </div>
+
+  <!-- Segments panel -->
+  <div class="tab-panel" id="tab-segments">
+    <ul id="seg-list"></ul>
+  </div>
+
+  <!-- Timeline panel -->
+  <div class="tab-panel" id="tab-timeline">
+    <div id="word-track-wrap">
+      <div id="word-track"></div>
+    </div>
+    <p class="timeline-label">Kliknij słowo aby przejść do tego miejsca · zaznaczone = aktualnie odtwarzane</p>
+  </div>
+
+  <!-- Export -->
+  <div class="export-bar">
+    <button class="btn-sm" id="copy-btn">Kopiuj</button>
+    <button class="btn-sm" id="srt-btn">Eksportuj SRT</button>
+  </div>
+</div>
+
+<script>
+// ── Tab switching ────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`tab-${tab}`).classList.add('active');
+  });
+});
+</script>
+<script src="app.js"></script>
+</body>
+</html>

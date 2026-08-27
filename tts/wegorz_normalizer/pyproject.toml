@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "wegorz-normalizer"
+version = "1.0.0"
+description = "Polish TTS text normalizer — converts raw text to speech-ready form"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "num2words>=0.5.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wegorz_normalizer*"]
+
+[tool.setuptools.package-data]
+wegorz_normalizer = [
+    "polish_vocab_cap_reserved.json",
+    "slownik_wymowy.json",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

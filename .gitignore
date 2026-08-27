@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+parakeet_config.json
+parakeet-ui/node_modules/
+parakeet-ui/.next/
+parakeet-ui/out/
+translate/outputs/
+*.log
+
+# Production binaries stay in the deploy directory, outside Git history.
+models/asr/*.nemo
+models/translate/*.pt
+models/tts/checkpoints/*.pt
+models/tts/vocos-mel-24khz/*.bin
+models/tts/voice_banks/*.pt
+tools/deno/deno
