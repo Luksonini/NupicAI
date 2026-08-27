@@ -3,9 +3,9 @@ __pycache__/
 .venv/
 .env
 parakeet_config.json
+admin_config.json
 parakeet-ui/node_modules/
 parakeet-ui/.next/
-parakeet-ui/out/
 translate/outputs/
 *.log
 

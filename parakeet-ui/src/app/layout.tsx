@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Węgorz Dubbing Studio',
-  description: 'Transkrypcja, tłumaczenie i dubbing TTS z kontrolą głosu oraz emocji',
+  title: 'Węgorz Studio',
+  description: 'Transkrypcja, tłumaczenie i dubbing',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

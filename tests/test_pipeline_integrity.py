@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import unittest
 import json
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
 
 import server
 
@@ -78,6 +83,28 @@ class PipelineIntegrityTests(unittest.TestCase):
             self.assertGreaterEqual(raw_id, 0)
             self.assertLess(raw_id, 1535)
         self.assertEqual(int(speaker_map["1079801"]), 1529)
+
+    def test_audio_mix_renders_source_and_dubbing(self) -> None:
+        sr = 24000
+        t = np.arange(sr, dtype=np.float32) / sr
+        background = 0.08 * np.sin(2 * np.pi * 220 * t)
+        voice = np.zeros(sr, dtype=np.float32)
+        voice[sr // 4:3 * sr // 4] = 0.2 * np.sin(2 * np.pi * 440 * t[:sr // 2])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.wav"
+            dubbed = root / "dubbed.wav"
+            mixed = root / "mixed.wav"
+            sf.write(source, background, sr)
+            sf.write(dubbed, voice, sr)
+            server._render_audio_mix(
+                source, dubbed, mixed,
+                original_gain=0.25, dubbing_gain=1.0, ducking_strength=0.65,
+            )
+            audio, mixed_sr = sf.read(mixed)
+            self.assertEqual(mixed_sr, sr)
+            self.assertGreater(len(audio), int(0.95 * sr))
+            self.assertGreater(float(np.max(np.abs(audio))), 0.05)
 
 
 if __name__ == "__main__":

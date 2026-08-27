@@ -52,6 +52,24 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
     a.download = 'transcript.srt'; a.click();
   };
 
+  const downloadText = (contents: string, filename: string, type = 'text/plain') => {
+    const url = URL.createObjectURL(new Blob([contents], { type }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportText = () => downloadText(result.transcript, 'transcript.txt');
+
+  const exportVtt = () => {
+    const lines = result.segments.map((s, i) =>
+      `${i + 1}\n${srtTs(s.start).replace(',', '.')} --> ${srtTs(s.end).replace(',', '.')}\n${s.text}`
+    ).join('\n\n');
+    downloadText(`WEBVTT\n\n${lines}\n`, 'transcript.vtt', 'text/vtt');
+  };
+
   const tabs: { id: Tab; label: string }[] = [
     { id: 'transcript', label: 'Transkrypcja' },
     { id: 'segments', label: `Segmenty (${result.segment_count})` },
@@ -77,6 +95,14 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
           <button onClick={exportSrt}
             className="text-xs px-3 py-1 rounded bg-surface2 border border-border hover:bg-border transition-colors">
             SRT
+          </button>
+          <button onClick={exportVtt}
+            className="text-xs px-3 py-1 rounded bg-surface2 border border-border hover:bg-border transition-colors">
+            VTT
+          </button>
+          <button onClick={exportText}
+            className="text-xs px-3 py-1 rounded bg-surface2 border border-border hover:bg-border transition-colors">
+            TXT
           </button>
         </div>
       </div>
@@ -109,7 +135,7 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
           {result.segments.map((seg, i) => (
             <li key={i} onClick={() => seek(seg.start)}
               className={`flex gap-3 items-start px-3 py-2 rounded-lg cursor-pointer border transition-colors ${
-                activeSeg === i ? 'bg-[#1e2a45] border-accent' : 'border-transparent hover:bg-surface2'
+                activeSeg === i ? 'bg-accent/10 border-accent' : 'border-transparent hover:bg-surface2'
               }`}>
               <span className="text-accent text-xs font-semibold tabular-nums pt-0.5 min-w-[36px]">{fmt(seg.start)}</span>
               <span className="text-sm">{seg.text}</span>
@@ -137,7 +163,6 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
               );
             })}
           </div>
-          <p className="text-xs text-muted text-center mt-1">Kliknij słowo → przewiń audio</p>
         </div>
       )}
     </div>

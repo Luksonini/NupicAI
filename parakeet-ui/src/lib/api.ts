@@ -1,4 +1,4 @@
-import type { JobEvent, Speaker, DubParams, TTSModelProfile } from './types';
+import type { AdminSettings, JobEvent, Speaker, DubParams, TTSModelProfile } from './types';
 
 const BASE = '';
 
@@ -104,6 +104,10 @@ export function dubAudioUrl(jobId: string): string {
   return `${BASE}/jobs/${jobId}/audio`;
 }
 
+export function mixAudioUrl(jobId: string): string {
+  return `${BASE}/jobs/${jobId}/mix_audio`;
+}
+
 export function mixVideoUrl(dubJobId: string, transcribeJobId: string): string {
   return `${BASE}/mix_video?dub_job_id=${dubJobId}&transcribe_job_id=${transcribeJobId}`;
 }
@@ -136,4 +140,38 @@ export async function checkHealth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function getAdminSettings(token: string): Promise<AdminSettings> {
+  const res = await fetch(`${BASE}/admin/settings`, {
+    headers: { 'X-Admin-Token': token },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? res.statusText);
+  }
+  return await res.json() as AdminSettings;
+}
+
+export async function saveAdminSettings(
+  token: string,
+  settings: {
+    translation_endpoint: string;
+    translation_model: string;
+    translation_mode: string;
+    translation_batch_segments: number;
+    translation_api_key: string;
+    clear_translation_api_key: boolean;
+  },
+): Promise<AdminSettings> {
+  const res = await fetch(`${BASE}/admin/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? res.statusText);
+  }
+  return await res.json() as AdminSettings;
 }

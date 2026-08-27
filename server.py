@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,8 @@ TRANSLATE_LOCAL = HERE / "translate"
 MODELS_LOCAL   = HERE / "models"
 YTDLP_DENO     = HERE / "tools/deno/deno"
 LEGACY_GRADIO_CONFIG = HERE / "parakeet_config.json"
+ADMIN_CONFIG_PATH = HERE / "admin_config.json"
+ADMIN_TOKEN = os.environ.get("WEGORZ_ADMIN_TOKEN", "").strip()
 
 # Production TTS profiles. All runtime artifacts must stay inside this folder.
 TTS_DAEMON     = TTS_LOCAL / "tts_daemon.py"
@@ -784,6 +787,8 @@ core._CONFIG = {
     "asr_wordseg_max_chars": 180,
     "translation_endpoint": os.environ.get("TRANSLATION_ENDPOINT", "https://ai.nupic.homes/v1"),
     "translation_model": os.environ.get("TRANSLATION_MODEL", "qwen3.5:35b-mtp"),
+    "translation_mode": os.environ.get("TRANSLATION_MODE", "qwen_mtp_35b_json_overlap"),
+    "translation_batch_segments": int(os.environ.get("TRANSLATION_BATCH_SEGMENTS", "8")),
     "translation_api_key": "",
     "translation_target_lang": "pl",
     "translation_source_lang": "auto",
@@ -810,7 +815,42 @@ core._CONFIG["translation_api_key"] = (
     or _load_legacy_translation_api_key()
 )
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile  # noqa: E402
+
+def _load_admin_config() -> None:
+    try:
+        data = json.loads(ADMIN_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    for key in ("translation_endpoint", "translation_model", "translation_mode"):
+        value = str(data.get(key, "")).strip()
+        if value:
+            core._CONFIG[key] = value
+    if data.get("translation_batch_segments") is not None:
+        core._CONFIG["translation_batch_segments"] = max(1, min(20, int(data["translation_batch_segments"])))
+    saved_key = str(data.get("translation_api_key", "")).strip()
+    if saved_key and not os.environ.get("NUPIC_API_KEY", "").strip():
+        core._CONFIG["translation_api_key"] = saved_key
+
+
+def _save_admin_config() -> None:
+    payload = {
+        "translation_endpoint": str(core._CONFIG.get("translation_endpoint", "")),
+        "translation_model": str(core._CONFIG.get("translation_model", "")),
+        "translation_mode": str(core._CONFIG.get("translation_mode", "")),
+        "translation_batch_segments": int(core._CONFIG.get("translation_batch_segments", 8)),
+        "translation_api_key": str(core._CONFIG.get("translation_api_key", "")),
+    }
+    tmp = ADMIN_CONFIG_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(ADMIN_CONFIG_PATH)
+
+
+_load_admin_config()
+
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -1213,10 +1253,10 @@ class TranslateRequest(BaseModel):
     segments: list[dict[str, Any]]
     source_lang: str = "auto"
     target_lang: str = "pl"
-    mode: str = "qwen_mtp_35b_json_overlap"
-    model: str = "qwen3.5:35b-mtp"
+    mode: str = ""
+    model: str = ""
     api_key: str = ""
-    batch_segments: int = 8
+    batch_segments: int = 0
 
 
 def _worker_translate(job: Job, req: TranslateRequest) -> None:
@@ -1226,6 +1266,8 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
         _validate_segment_timeline(req.segments, stage="tłumaczenie")
 
         selected_model = str(req.model or core._CONFIG.get("translation_model", "qwen3.5:35b-mtp"))
+        selected_mode = str(req.mode or core._CONFIG.get("translation_mode", "qwen_mtp_35b_json_overlap"))
+        selected_batch = int(req.batch_segments or core._CONFIG.get("translation_batch_segments", 8))
         env_key_name = "GEMINI_API_KEY" if selected_model.startswith("gemini") else "NUPIC_API_KEY"
         key = (
             req.api_key.strip()
@@ -1266,8 +1308,8 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
             api_key=key,
             endpoint=str(core._CONFIG.get("translation_endpoint", "")),
             model=selected_model,
-            mode=req.mode,
-            batch_segments=max(1, req.batch_segments),
+            mode=selected_mode,
+            batch_segments=max(1, min(20, selected_batch)),
             temperature=float(core._CONFIG.get("translation_temperature", 0.1)),
             timeout=float(core._CONFIG.get("translation_timeout_seconds", 600)),
             retry=int(core._CONFIG.get("translation_retry", 2)),
@@ -1305,7 +1347,7 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
             "segments": translated,
             "source_lang": req.source_lang,
             "target_lang": req.target_lang,
-            "model": req.model,
+            "model": selected_model,
             "elapsed": round(elapsed, 2),
             "meta": meta,
         }
@@ -1341,6 +1383,51 @@ class DubRequest(BaseModel):
     short_continuity_ms: float = 0.0
     emotion_group: str = "neutral"
     emotion_strength: float = 3.0
+    original_gain: float = 0.22
+    dubbing_gain: float = 1.0
+    ducking_strength: float = 0.65
+
+
+def _render_audio_mix(
+    source_path: Path,
+    dubbed_path: Path,
+    out_path: Path,
+    *,
+    original_gain: float,
+    dubbing_gain: float,
+    ducking_strength: float,
+) -> None:
+    """Mix source ambience and dubbed speech with optional sidechain ducking."""
+    original_gain = max(0.0, min(1.5, float(original_gain)))
+    dubbing_gain = max(0.0, min(1.5, float(dubbing_gain)))
+    ducking_strength = max(0.0, min(1.0, float(ducking_strength)))
+    if ducking_strength > 0.001:
+        ratio = 1.0 + 15.0 * ducking_strength
+        threshold = 0.08 - 0.06 * ducking_strength
+        graph = (
+            f"[0:a]aformat=sample_rates=24000:channel_layouts=mono,volume={original_gain:.4f}[original];"
+            f"[1:a]aformat=sample_rates=24000:channel_layouts=mono,volume={dubbing_gain:.4f},"
+            "asplit=2[sidechain][voice];"
+            f"[original][sidechain]sidechaincompress=threshold={threshold:.4f}:ratio={ratio:.3f}:"
+            "attack=15:release=280[ducked];"
+            "[ducked][voice]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95[mix]"
+        )
+    else:
+        graph = (
+            f"[0:a]aformat=sample_rates=24000:channel_layouts=mono,volume={original_gain:.4f}[original];"
+            f"[1:a]aformat=sample_rates=24000:channel_layouts=mono,volume={dubbing_gain:.4f}[voice];"
+            "[original][voice]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95[mix]"
+        )
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(source_path), "-i", str(dubbed_path),
+            "-filter_complex", graph, "-map", "[mix]", "-ac", "1", "-ar", "24000",
+            "-c:a", "pcm_s16le", str(out_path),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
 
 
 def _worker_dub(job: Job, req: DubRequest) -> None:
@@ -1470,15 +1557,35 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
         out_wav = out_dir / "dubbed.wav"
         end_sample = min(len(full), int(last_end * SR) + SR)
         sf.write(str(out_wav), full[:end_sample], SR)
+        mixed_wav: Path | None = None
+        source_job = _jobs.get(req.transcribe_job_id)
+        source_path_value = ((source_job.result or {}).get("upload_path") if source_job and source_job.result else "")
+        source_path = Path(str(source_path_value)) if source_path_value else None
+        if source_path is not None and source_path.exists():
+            mixed_wav = out_dir / "mixed.wav"
+            _render_audio_mix(
+                source_path,
+                out_wav,
+                mixed_wav,
+                original_gain=req.original_gain,
+                dubbing_gain=req.dubbing_gain,
+                ducking_strength=req.ducking_strength,
+            )
         debug_log = out_dir / "tts_debug.json"
         debug_log.write_text(json.dumps(meta_segments, ensure_ascii=False, indent=2), encoding="utf-8")
 
         result = {
             "audio_path": str(out_wav),
+            "mixed_audio_path": str(mixed_wav) if mixed_wav is not None else "",
             "duration": round(last_end, 3),
             "transcribe_job_id": req.transcribe_job_id,
             "segments": meta_segments,
             "debug_log": str(debug_log),
+            "mix": {
+                "original_gain": round(float(req.original_gain), 3),
+                "dubbing_gain": round(float(req.dubbing_gain), 3),
+                "ducking_strength": round(float(req.ducking_strength), 3),
+            },
         }
         job.result = result
         job.status = "done"
@@ -1495,9 +1602,15 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(title="Węgorz Dubbing Studio API", version="3.0")
+_cors_origins = [
+    value.strip() for value in os.environ.get(
+        "WEGORZ_CORS_ORIGINS",
+        "http://127.0.0.1:8765,http://localhost:8765",
+    ).split(",") if value.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1563,6 +1676,104 @@ async def health() -> dict[str, Any]:
             if proc is not None and proc.poll() is None
         ),
     }
+
+
+def _require_admin(token: str) -> None:
+    if not ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Panel administratora wymaga WEGORZ_ADMIN_TOKEN w środowisku serwera.",
+        )
+    if not token or not secrets.compare_digest(token, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="Nieprawidłowy token administratora")
+
+
+def _masked_secret(value: str) -> str:
+    value = str(value or "")
+    if not value:
+        return ""
+    suffix = value[-4:] if len(value) >= 4 else value
+    return f"••••••••{suffix}"
+
+
+class AdminSettingsRequest(BaseModel):
+    translation_endpoint: str = ""
+    translation_model: str = ""
+    translation_mode: str = ""
+    translation_batch_segments: int = 8
+    translation_api_key: str = ""
+    clear_translation_api_key: bool = False
+
+
+@app.get("/admin/settings")
+async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, Any]:
+    _require_admin(x_admin_token)
+    recent_jobs = []
+    for job in list(_jobs.values())[-30:][::-1]:
+        result = job.result or {}
+        segment_debug = []
+        for segment in list(result.get("segments") or [])[:200]:
+            summary = dict(segment.get("tts_debug_summary") or {})
+            segment_debug.append({
+                "index": segment.get("index"),
+                "start": segment.get("start"),
+                "audio_duration": segment.get("audio_duration"),
+                "target_budget": segment.get("target_budget"),
+                "speed": segment.get("speed"),
+                "over_budget": segment.get("over_budget"),
+                "warnings": list(summary.get("warnings") or []),
+                "low_token_count": summary.get("low_token_count", 0),
+            })
+        recent_jobs.append({
+            "id": job.id,
+            "kind": job.kind,
+            "status": job.status,
+            "message": job.message,
+            "error": job.error,
+            "debug_log": str(result.get("debug_log", "")),
+            "duration": result.get("duration"),
+            "segments": segment_debug,
+        })
+    api_key = str(core._CONFIG.get("translation_api_key", ""))
+    return {
+        "translation_endpoint": str(core._CONFIG.get("translation_endpoint", "")),
+        "translation_model": str(core._CONFIG.get("translation_model", "")),
+        "translation_mode": str(core._CONFIG.get("translation_mode", "")),
+        "translation_batch_segments": int(core._CONFIG.get("translation_batch_segments", 8)),
+        "translation_api_key_configured": bool(api_key),
+        "translation_api_key_masked": _masked_secret(api_key),
+        "tts_profile": _daemon_active_profile or DEFAULT_TTS_PROFILE,
+        "tts_loaded_profiles": sorted(
+            key for key, proc in _daemon_procs.items()
+            if proc is not None and proc.poll() is None
+        ),
+        "model_ready": _MODEL_READY.is_set(),
+        "tts_ready": _TTS_READY.is_set(),
+        "recent_jobs": recent_jobs,
+    }
+
+
+@app.post("/admin/settings")
+async def update_admin_settings(
+    req: AdminSettingsRequest,
+    x_admin_token: str = Header(default=""),
+) -> dict[str, Any]:
+    _require_admin(x_admin_token)
+    for key, value in (
+        ("translation_endpoint", req.translation_endpoint),
+        ("translation_model", req.translation_model),
+        ("translation_mode", req.translation_mode),
+    ):
+        clean = str(value or "").strip()
+        if clean:
+            core._CONFIG[key] = clean
+    core._CONFIG["translation_batch_segments"] = max(1, min(20, int(req.translation_batch_segments)))
+    if req.clear_translation_api_key:
+        core._CONFIG["translation_api_key"] = ""
+    elif str(req.translation_api_key or "").strip():
+        core._CONFIG["translation_api_key"] = str(req.translation_api_key).strip()
+    _save_admin_config()
+    return await admin_settings(x_admin_token)
 
 
 @app.get("/tts_models")
@@ -1837,6 +2048,23 @@ async def job_audio(job_id: str) -> StreamingResponse:
     )
 
 
+@app.get("/jobs/{job_id}/mix_audio")
+async def job_mix_audio(job_id: str) -> StreamingResponse:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "done" or job.result is None:
+        raise HTTPException(status_code=409, detail="Job not finished")
+    audio_path = Path(str(job.result.get("mixed_audio_path", "")))
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Mixed audio file not found")
+    return StreamingResponse(
+        open(audio_path, "rb"),
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'attachment; filename="mix_{job_id}.wav"'},
+    )
+
+
 @app.get("/jobs/{job_id}/source")
 async def job_source(job_id: str) -> FileResponse:
     job = _jobs.get(job_id)
@@ -1859,7 +2087,9 @@ async def mix_video(dub_job_id: str, transcribe_job_id: str) -> StreamingRespons
         raise HTTPException(status_code=404, detail="Job not found")
     if dub_job.status != "done" or dub_job.result is None:
         raise HTTPException(status_code=409, detail="Dub job not finished")
-    dubbed_wav = Path(dub_job.result.get("audio_path", ""))
+    dubbed_wav = Path(
+        str(dub_job.result.get("mixed_audio_path") or dub_job.result.get("audio_path", ""))
+    )
     if not dubbed_wav.exists():
         raise HTTPException(status_code=404, detail="Dubbed audio missing")
     upload_path_str = (asr_job.result or {}).get("upload_path", "")

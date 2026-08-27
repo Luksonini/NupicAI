@@ -1,6 +1,15 @@
 # Wegorz Dubbing Studio
 
-Hermetyczny folder aplikacji dubbingowej z lokalnym ASR Parakeet, lokalnym TTS Wegorz, lokalnym vocoderem Vocos, lokalnym bankiem glosow oraz lokalnym modelem tlumaczenia Wegorz.
+Hermetyczny folder aplikacji do transkrypcji, tlumaczenia, dubbingu i syntezy glosu z lokalnym ASR Parakeet, lokalnym TTS Wegorz, lokalnym vocoderem Vocos, lokalnym bankiem glosow oraz lokalnym modelem tlumaczenia Wegorz.
+
+Interfejs rozdziela cztery uslugi, ale zachowuje jeden wspolny projekt:
+
+```text
+Transkrypcja -> Tlumaczenie -> Dubbing
+                         +-> Studio glosu
+```
+
+Wynik poprzedniego etapu pozostaje w pamieci projektu, dlatego przejscie do kolejnej uslugi nie uruchamia ponownie ASR ani tlumaczenia.
 
 ## Co jest w tym folderze
 
@@ -61,8 +70,10 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+cp .env.example .env
+# Edytuj .env: ustaw WEGORZ_ADMIN_TOKEN i NUPIC_API_KEY.
 python check_production.py
-HOST=127.0.0.1 PORT=8765 ./start.sh
+./start.sh
 ```
 
 Potem otworz:
@@ -74,8 +85,34 @@ http://127.0.0.1:8765
 Jesli aplikacja ma byc dostepna z innych komputerow w sieci:
 
 ```bash
-HOST=0.0.0.0 PORT=8765 ./start.sh
+# W .env ustaw HOST=0.0.0.0 oraz dopisz publiczny origin do WEGORZ_CORS_ORIGINS.
+./start.sh
 ```
+
+`start.sh` automatycznie laduje lokalny plik `.env`. `WEGORZ_ADMIN_TOKEN` chroni zakladke Administrator. Bez tej zmiennej uslugi uzytkownika nadal dzialaja, ale backend administracyjny pozostaje zablokowany. `WEGORZ_CORS_ORIGINS` powinno zawierac wylacznie adresy frontendu, ktore maja korzystac z API.
+
+## Widoki uzytkownika i administratora
+
+Zwykly uzytkownik ma dostep do materialu, tekstu, tlumaczenia, glosu, tempa, miksu i eksportu. Parametry checkpointow, flow, duration, klucz API oraz diagnostyka zadan nie sa wyswietlane w standardowym workflow.
+
+Zakladka Administrator zawiera:
+
+- endpoint, model i tryb tlumaczenia,
+- zapis lub usuniecie klucza API,
+- stan ASR i TTS,
+- aktywny profil TTS oraz modele zaladowane do pamieci,
+- ostatnie zadania i sciezki logow diagnostycznych.
+
+Klucz API jest zapisywany lokalnie w `admin_config.json` z uprawnieniami `0600`. Plik jest ignorowany przez Git, a frontend otrzymuje tylko zamaskowana koncowke klucza. Zmienna `NUPIC_API_KEY` ma pierwszenstwo przy starcie serwera.
+
+## Miks dubbingu
+
+Dubbing tworzy dwa pliki:
+
+- `dubbed.wav` - sam wygenerowany glos,
+- `mixed.wav` - glos polaczony z oryginalna sciezka.
+
+Panel miksu steruje poziomem oryginalu, poziomem dubbingu i sidechain duckingiem. Ducking automatycznie scisza oryginal podczas wypowiedzi lektora, z lagodnym attack/release i limiterem na wyjsciu. Bez separacji stemow suwak oryginalu obejmuje jednoczesnie mowe, muzyke i efekty z materialu zrodlowego.
 
 ## Modele lokalne
 
@@ -89,14 +126,14 @@ ASR jest ladowany lokalnie przez `EncDecRNNTBPEModel.restore_from(...)`. To ozna
 
 ### TTS
 
-Strona zawiera dwa kompletne profile wybierane w interfejsie:
+Strona zawiera dwa kompletne profile zarzadzane przez backend:
 
 ```text
 models/tts/checkpoints/styleenc128_lstm.pt
 models/tts/checkpoints/mini_dualpath_learnedvoice.pt
 ```
 
-`styleenc128_lstm` jest profilem domyslnym. Oba checkpointy zawieraja potrzebne wagi enkodera lub tablic learned voice; runtime nie pobiera ich z katalogu treningowego.
+`styleenc128_lstm` jest profilem domyslnym. Wybor technicznego profilu nie jest pokazywany zwyklemu uzytkownikowi. Oba checkpointy zawieraja potrzebne wagi enkodera lub tablic learned voice; runtime nie pobiera ich z katalogu treningowego.
 Mapa `tts/learned_voice_speaker_map.json` odwzorowuje surowe ID z banku glosow na wiersze tablicy learned voice, dlatego manifest treningowy nie jest potrzebny na produkcji.
 
 Architektura modelu jest w:
@@ -259,6 +296,16 @@ Test integralnosci chunkowania i segmentow:
 ```bash
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
+
+Przebudowanie frontendu nie jest potrzebne przy zwyklym uruchomieniu. Do pracy nad UI uzyj Node.js 18+:
+
+```bash
+cd parakeet-ui
+npm install
+npm run build
+```
+
+Wynik trafia do `parakeet-ui/out/` i jest serwowany bezposrednio przez FastAPI.
 
 ## Znane ograniczenia
 

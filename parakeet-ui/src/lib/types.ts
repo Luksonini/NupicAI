@@ -38,10 +38,16 @@ export interface TranslateResult {
 
 export interface DubResult {
   audio_path: string;
+  mixed_audio_path?: string;
   duration: number;
   transcribe_job_id: string;
   segments?: Array<Record<string, unknown>>;
   debug_log?: string;
+  mix?: {
+    original_gain: number;
+    dubbing_gain: number;
+    ducking_strength: number;
+  };
 }
 
 export interface TTSToken {
@@ -108,6 +114,37 @@ export interface DubParams {
   short_continuity_ms: number;
   emotion_group: string;
   emotion_strength: number;
+  original_gain: number;
+  dubbing_gain: number;
+  ducking_strength: number;
+}
+
+export interface AdminJob {
+  id: string;
+  kind: string;
+  status: string;
+  message?: string;
+  error?: string;
+  debug_log?: string;
+  duration?: number;
+  segments?: Array<{
+    index?: number; start?: number; audio_duration?: number; target_budget?: number;
+    speed?: number; over_budget?: number; warnings?: string[]; low_token_count?: number;
+  }>;
+}
+
+export interface AdminSettings {
+  translation_endpoint: string;
+  translation_model: string;
+  translation_mode: string;
+  translation_batch_segments: number;
+  translation_api_key_configured: boolean;
+  translation_api_key_masked: string;
+  tts_profile: string;
+  tts_loaded_profiles: string[];
+  model_ready: boolean;
+  tts_ready: boolean;
+  recent_jobs: AdminJob[];
 }
 
 export const TRANSLATION_MODES = [
