@@ -49,6 +49,8 @@ textarea { resize: vertical; }
 }
 .brand-mark { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: var(--accent-strong); font-weight: 750; white-space: nowrap; }
 .brand-mark span { color: var(--text); font-size: 17px; }
+.brand-mark span strong { color: var(--accent-strong); font-weight: 780; }
+.brand-mark img { width: 25px; height: 25px; object-fit: contain; flex: 0 0 auto; }
 .new-project { margin: 18px 0 22px; justify-content: center; white-space: nowrap; }
 .nav-label { display: block; padding: 0 9px 7px; color: #697267; font-size: 10px; font-weight: 750; text-transform: uppercase; }
 .service-nav { display: flex; flex-direction: column; gap: 3px; }

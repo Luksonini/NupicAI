@@ -1,6 +1,18 @@
-# Wegorz Dubbing Studio
+# NupicAI Studio
 
 Hermetyczny folder aplikacji do transkrypcji, tlumaczenia, dubbingu i syntezy glosu z lokalnym ASR Parakeet, lokalnym TTS Wegorz, lokalnym vocoderem Vocos, lokalnym bankiem glosow oraz lokalnym modelem tlumaczenia Wegorz.
+
+NupicAI jest marka aplikacji. Nazwa Wegorz pozostaje nazwa lokalnego silnika TTS i translatora.
+
+## Logo i identyfikacja
+
+Glowne logo umiesc jako:
+
+```text
+parakeet-ui/public/brand/logo.png
+```
+
+Zalecany jest przezroczysty PNG albo WebP w proporcjach zblizonych do kwadratu, co najmniej `128x128 px`. Interfejs skaluje znak do `25x25 px`; gdy pliku nie ma, automatycznie pokazuje ikone audio. Po zmianie logo wykonaj `npm run build` w katalogu `parakeet-ui`.
 
 Interfejs rozdziela cztery uslugi, ale zachowuje jeden wspolny projekt:
 

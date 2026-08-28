@@ -109,7 +109,7 @@ export default function Home() {
 
   return <div className={`app-shell ${railOpen ? '' : 'rail-collapsed'}`}>
     <aside className="app-rail">
-      <div className="brand-mark"><AudioLines size={21} /><span>Węgorz</span></div>
+      <BrandMark />
       <button className="button button-primary new-project" onClick={resetProject}><Plus size={16} /><span>Nowy projekt</span></button>
       <nav className="service-nav" aria-label="Usługi">
         <span className="nav-label">Usługi</span>
@@ -154,6 +154,16 @@ export default function Home() {
         {service === 'admin' && <AdminPanel />}
       </main>
     </div>
+  </div>;
+}
+
+function BrandMark() {
+  const [logoAvailable, setLogoAvailable] = useState(true);
+  return <div className="brand-mark" aria-label="NupicAI">
+    {logoAvailable
+      ? <img src="/brand/logo.png" alt="" onError={() => setLogoAvailable(false)} />
+      : <AudioLines size={21} />}
+    <span>Nupic<strong>AI</strong></span>
   </div>;
 }
 

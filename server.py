@@ -1601,7 +1601,7 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
 
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
-app = FastAPI(title="Węgorz Dubbing Studio API", version="3.0")
+app = FastAPI(title="NupicAI Studio API", version="3.0")
 _cors_origins = [
     value.strip() for value in os.environ.get(
         "WEGORZ_CORS_ORIGINS",
