@@ -12,7 +12,7 @@ Glowne logo umiesc jako:
 parakeet-ui/public/brand/logo.png
 ```
 
-Zalecany jest przezroczysty PNG albo WebP w proporcjach zblizonych do kwadratu, co najmniej `128x128 px`. Interfejs skaluje znak do `25x25 px`; gdy pliku nie ma, automatycznie pokazuje ikone audio. Po zmianie logo wykonaj `npm run build` w katalogu `parakeet-ui`.
+Logo moze byc szerokim, przezroczystym PNG albo WebP. Interfejs miesci je w obszarze `196x58 px`; gdy pliku nie ma, automatycznie pokazuje ikone audio i tekst NupicAI. Po zmianie logo wykonaj `npm run build` w katalogu `parakeet-ui`.
 
 Interfejs rozdziela cztery uslugi, ale zachowuje jeden wspolny projekt:
 

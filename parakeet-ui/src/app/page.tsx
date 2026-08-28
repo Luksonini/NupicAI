@@ -159,10 +159,9 @@ export default function Home() {
 
 function BrandMark() {
   const [logoAvailable, setLogoAvailable] = useState(true);
-  return <div className="brand-mark" aria-label="NupicAI">
-    {logoAvailable
-      ? <img src="/brand/logo.png" alt="" onError={() => setLogoAvailable(false)} />
-      : <AudioLines size={21} />}
+  return <div className={`brand-mark ${logoAvailable ? 'has-logo' : 'fallback'}`} aria-label="NupicAI">
+    <img src="/brand/logo.png" alt="NupicAI" onError={() => setLogoAvailable(false)} />
+    <AudioLines className="brand-icon" size={21} />
     <span>Nupic<strong>AI</strong></span>
   </div>;
 }

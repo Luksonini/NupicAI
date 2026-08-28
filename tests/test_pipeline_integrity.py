@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -12,6 +13,25 @@ import server
 
 
 class PipelineIntegrityTests(unittest.TestCase):
+    def test_local_env_loads_values_without_overriding_process_env(self) -> None:
+        new_key = "WEGORZ_TEST_DOTENV_NEW"
+        existing_key = "WEGORZ_TEST_DOTENV_EXISTING"
+        os.environ.pop(new_key, None)
+        os.environ[existing_key] = "from-process"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                env_file = Path(tmp) / ".env"
+                env_file.write_text(
+                    f"{new_key}='from-file'\n{existing_key}=must-not-win\n",
+                    encoding="utf-8",
+                )
+                server._load_local_env(env_file)
+            self.assertEqual(os.environ[new_key], "from-file")
+            self.assertEqual(os.environ[existing_key], "from-process")
+        finally:
+            os.environ.pop(new_key, None)
+            os.environ.pop(existing_key, None)
+
     def test_asr_slice_plan_covers_boundaries_without_ownership_gaps(self) -> None:
         for duration in (0.5, 179.9, 180.0, 180.05, 359.0, 541.37):
             plans = server._plan_asr_slices(duration, window=180.0, overlap=2.0)
