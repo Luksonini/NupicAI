@@ -157,6 +157,9 @@ export default function AdminPanel() {
           </div>
           <div className="meta-row"><span>Profil TTS</span><strong>{settings.tts_profile}</strong></div>
           <div className="meta-row"><span>Modele w pamięci</span><strong>{settings.tts_loaded_profiles.length}</strong></div>
+          <div className="meta-row"><span>Konta użytkowników</span><strong>{settings.registered_users}</strong></div>
+          <div className="meta-row"><span>Aktywne sesje</span><strong>{settings.active_sessions}</strong></div>
+          <div className="meta-row"><span>Retencja plików</span><strong>{settings.data_retention_hours} h</strong></div>
         </section>
       </aside>
 

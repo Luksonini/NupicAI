@@ -10,9 +10,75 @@ import numpy as np
 import soundfile as sf
 
 import server
+from auth_store import AuthStore, User
 
 
 class PipelineIntegrityTests(unittest.TestCase):
+    def test_account_passwords_and_sessions_are_not_stored_in_plaintext(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "accounts.sqlite3"
+            store = AuthStore(db_path, session_days=2)
+            user = store.register("Test@Example.com", "Test User", "bezpieczne-haslo-123")
+            self.assertEqual(user.email, "test@example.com")
+            self.assertIsNone(store.authenticate(user.email, "zle-haslo"))
+            self.assertEqual(store.authenticate(user.email, "bezpieczne-haslo-123"), user)
+            token, expires_at = store.create_session(user.id)
+            self.assertGreater(expires_at, user.created_at)
+            self.assertEqual(store.user_for_session(token), user)
+            raw_db = db_path.read_bytes()
+            self.assertNotIn(b"bezpieczne-haslo-123", raw_db)
+            self.assertNotIn(token.encode("utf-8"), raw_db)
+            store.delete_session(token)
+            self.assertIsNone(store.user_for_session(token))
+
+    def test_job_owner_cannot_read_another_users_job(self) -> None:
+        owner = User("a" * 32, "a@example.com", "A", 1.0)
+        stranger = User("b" * 32, "b@example.com", "B", 1.0)
+        job = server.Job(id="job-owner-test", kind="test", owner_id=owner.id)
+        server._jobs[job.id] = job
+        try:
+            self.assertIs(server._require_job(job.id, owner), job)
+            with self.assertRaises(server.HTTPException) as caught:
+                server._require_job(job.id, stranger)
+            self.assertEqual(caught.exception.status_code, 404)
+        finally:
+            server._jobs.pop(job.id, None)
+
+    def test_retention_removes_expired_finished_job_but_not_active_job(self) -> None:
+        old_work = server._WORK
+        old_hours = server.DATA_RETENTION_HOURS
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                server._WORK = Path(tmp)
+                server.DATA_RETENTION_HOURS = 1
+                user = User("c" * 32, "c@example.com", "C", 1.0)
+                old_dir = server._user_work_dir(user.id) / "jobs" / "old"
+                active_dir = server._user_work_dir(user.id) / "jobs" / "active"
+                old_dir.mkdir(parents=True)
+                active_dir.mkdir(parents=True)
+                old_file = old_dir / "source.wav"
+                active_file = active_dir / "source.wav"
+                old_file.write_bytes(b"old")
+                active_file.write_bytes(b"active")
+                old_time = 1_000.0
+                os.utime(old_file, (old_time, old_time))
+                os.utime(active_file, (old_time, old_time))
+                finished = server.Job("old", "test", owner_id=user.id, work_dir=old_dir, status="done", created_at=old_time)
+                active = server.Job("active", "test", owner_id=user.id, work_dir=active_dir, status="running", created_at=old_time)
+                server._jobs[finished.id] = finished
+                server._jobs[active.id] = active
+                result = server._cleanup_expired_user_files(now=10_000.0)
+                self.assertEqual(result["removed_directories"], 1)
+                self.assertFalse(old_dir.exists())
+                self.assertTrue(active_dir.exists())
+                self.assertNotIn(finished.id, server._jobs)
+                self.assertIn(active.id, server._jobs)
+            finally:
+                server._jobs.pop("old", None)
+                server._jobs.pop("active", None)
+                server._WORK = old_work
+                server.DATA_RETENTION_HOURS = old_hours
+
     def test_local_env_loads_values_without_overriding_process_env(self) -> None:
         new_key = "WEGORZ_TEST_DOTENV_NEW"
         existing_key = "WEGORZ_TEST_DOTENV_EXISTING"

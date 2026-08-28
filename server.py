@@ -29,6 +29,8 @@ from typing import Any, AsyncGenerator
 import numpy as np
 import soundfile as sf
 
+from auth_store import AuthStore, User
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 HERE = Path(__file__).resolve().parent
 
@@ -64,6 +66,11 @@ YTDLP_DENO     = HERE / "tools/deno/deno"
 LEGACY_GRADIO_CONFIG = HERE / "parakeet_config.json"
 ADMIN_CONFIG_PATH = HERE / "admin_config.json"
 ADMIN_TOKEN = os.environ.get("WEGORZ_ADMIN_TOKEN", "").strip()
+SESSION_COOKIE = "nupicai_session"
+SESSION_DAYS = max(1, int(os.environ.get("NUPICAI_SESSION_DAYS", "30")))
+DATA_RETENTION_HOURS = max(1, int(os.environ.get("NUPICAI_DATA_RETENTION_HOURS", "24")))
+SECURE_COOKIES = os.environ.get("NUPICAI_SECURE_COOKIES", "0").strip().lower() in {"1", "true", "yes", "on"}
+AUTH_STORE = AuthStore(HERE / "runtime/nupicai.sqlite3", session_days=SESSION_DAYS)
 
 # Production TTS profiles. All runtime artifacts must stay inside this folder.
 TTS_DAEMON     = TTS_LOCAL / "tts_daemon.py"
@@ -127,6 +134,7 @@ import parakeet_translation_core as core  # noqa: E402
 _SPEAKER_MEL: dict[str, str] = {}     # label → mel_24k path
 _SPEAKER_VOICE_EMB: dict[str, str] = {}  # label → precomputed spk_256 .pt
 _SPEAKER_ID_BY_LABEL: dict[str, int] = {}  # label → dataset/learned_voice speaker_id
+_CUSTOM_SPEAKER_OWNER: dict[str, str] = {}
 _RAW_SPEAKER_ID_TO_DENSE: dict[int, int] = {}
 _SPEAKER_LIST: list[dict[str, Any]] = []  # [{label, id}] for /speakers endpoint
 
@@ -875,9 +883,9 @@ def _save_admin_config() -> None:
 
 _load_admin_config()
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, UploadFile  # noqa: E402
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 import uvicorn  # noqa: E402
@@ -893,6 +901,8 @@ _loop: asyncio.AbstractEventLoop | None = None
 class Job:
     id: str
     kind: str
+    owner_id: str = ""
+    work_dir: Path | None = None
     status: str = "pending"
     progress: float = 0.0
     message: str = ""
@@ -905,6 +915,108 @@ class Job:
 _jobs: dict[str, Job] = {}
 _MODEL_READY = asyncio.Event()
 _TTS_READY = asyncio.Event()
+_cleanup_task: asyncio.Task[None] | None = None
+
+
+def _user_work_dir(user_id: str) -> Path:
+    if not re.fullmatch(r"[a-f0-9]{32}", str(user_id)):
+        raise ValueError("Invalid user id")
+    path = _WORK / "users" / user_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _new_job(user: User, kind: str) -> Job:
+    uid = uuid.uuid4().hex
+    work_dir = _user_work_dir(user.id) / "jobs" / uid
+    work_dir.mkdir(parents=True, exist_ok=True)
+    job = Job(id=uid, kind=kind, owner_id=user.id, work_dir=work_dir)
+    _jobs[uid] = job
+    return job
+
+
+def _job_work_dir(job: Job) -> Path:
+    if job.work_dir is None:
+        raise RuntimeError("Job has no isolated work directory")
+    job.work_dir.mkdir(parents=True, exist_ok=True)
+    return job.work_dir
+
+
+def _require_job(job_id: str, user: User) -> Job:
+    job = _jobs.get(job_id)
+    if job is None or job.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+def _current_user(request: Request) -> User:
+    user = AUTH_STORE.user_for_session(request.cookies.get(SESSION_COOKIE, ""))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Zaloguj się, aby korzystać ze studia")
+    return user
+
+
+def _public_user(user: User) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "created_at": user.created_at,
+        "data_retention_hours": DATA_RETENTION_HOURS,
+    }
+
+
+def _cleanup_expired_user_files(*, now: float | None = None) -> dict[str, int]:
+    now = time.time() if now is None else float(now)
+    cutoff = now - DATA_RETENTION_HOURS * 3600
+    users_root = _WORK / "users"
+    active_dirs = {
+        job.work_dir.resolve()
+        for job in _jobs.values()
+        if job.work_dir is not None and job.status in {"pending", "running"}
+    }
+    removed_dirs = 0
+    removed_bytes = 0
+    if users_root.exists():
+        for candidate in users_root.glob("*/jobs/*"):
+            if not candidate.is_dir() or candidate.resolve() in active_dirs:
+                continue
+            try:
+                newest = max((p.stat().st_mtime for p in candidate.rglob("*") if p.is_file()), default=candidate.stat().st_mtime)
+            except FileNotFoundError:
+                continue
+            if newest >= cutoff:
+                continue
+            removed_bytes += sum((p.stat().st_size for p in candidate.rglob("*") if p.is_file()), 0)
+            shutil.rmtree(candidate, ignore_errors=True)
+            removed_dirs += 1
+        for candidate in users_root.glob("*/voice_prompts"):
+            if not candidate.is_dir():
+                continue
+            for path in candidate.iterdir():
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        removed_bytes += path.stat().st_size if path.is_file() else 0
+                        shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass
+    for job_id, job in list(_jobs.items()):
+        if job.status not in {"pending", "running"} and job.created_at < cutoff:
+            _jobs.pop(job_id, None)
+    for label, owner_id in list(_CUSTOM_SPEAKER_OWNER.items()):
+        mel_path = Path(_SPEAKER_MEL.get(label, ""))
+        if not mel_path.exists():
+            _CUSTOM_SPEAKER_OWNER.pop(label, None)
+            _SPEAKER_MEL.pop(label, None)
+            _SPEAKER_LIST[:] = [entry for entry in _SPEAKER_LIST if entry.get("label") != label]
+    AUTH_STORE.cleanup_sessions()
+    return {"removed_directories": removed_dirs, "removed_bytes": removed_bytes}
+
+
+async def _periodic_cleanup() -> None:
+    while True:
+        await asyncio.sleep(3600)
+        await asyncio.to_thread(_cleanup_expired_user_files)
 
 
 def _push(job: Job, event: dict[str, Any]) -> None:
@@ -1107,11 +1219,12 @@ def _worker_transcribe(job: Job, upload_path: Path) -> None:
     wav_path: Path | None = None
     slice_paths: list[Path] = []
     uid = job.id[:8]
+    work_dir = _job_work_dir(job)
     try:
         job.status = "running"
         _push(job, {"type": "progress", "progress": 0.05, "message": "Konwertuję audio…"})
 
-        wav_path = core.convert_to_mono16k_wav(upload_path, _WORK)
+        wav_path = core.convert_to_mono16k_wav(upload_path, work_dir)
         duration = _ffprobe_dur(wav_path)
         if duration < 0.5:
             raise ValueError("Audio za krótkie (< 0.5 s)")
@@ -1129,19 +1242,19 @@ def _worker_transcribe(job: Job, upload_path: Path) -> None:
             is_last_slice = bool(plan["is_last"])
             if idx == 0 and is_last_slice:
                 if final_tail_pad > 1e-3:
-                    sl = _WORK / f"sl_{uid}_{idx:04d}_tailpad.wav"
+                    sl = work_dir / f"sl_{uid}_{idx:04d}_tailpad.wav"
                     slice_paths.append(_append_wav_tail_silence(wav_path, sl, pad_sec=final_tail_pad))
                 else:
                     slice_paths.append(wav_path)
             else:
-                sl = _WORK / f"sl_{uid}_{idx:04d}.wav"
+                sl = work_dir / f"sl_{uid}_{idx:04d}.wav"
                 subprocess.run(
                     ["ffmpeg", "-y", "-ss", f"{cur:.3f}", "-t", f"{win:.3f}",
                      "-i", str(wav_path), "-vn", "-ac", "1", "-ar", "16000", str(sl)],
                     check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
                 if is_last_slice and final_tail_pad > 1e-3:
-                    padded = _WORK / f"sl_{uid}_{idx:04d}_tailpad.wav"
+                    padded = work_dir / f"sl_{uid}_{idx:04d}_tailpad.wav"
                     sl = _append_wav_tail_silence(sl, padded, pad_sec=final_tail_pad)
                 slice_paths.append(sl)
             offsets.append(cur)
@@ -1265,7 +1378,7 @@ def _worker_transcribe_youtube(job: Job, url: str) -> None:
     try:
         job.status = "running"
         _push(job, {"type": "progress", "progress": 0.02, "message": "Pobieram film z YouTube…"})
-        video_path = _download_youtube_video(url, _WORK)
+        video_path = _download_youtube_video(url, _job_work_dir(job))
         _worker_transcribe(job, video_path)
     except Exception as exc:
         job.status = "error"
@@ -1471,7 +1584,7 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
         last_end = 0.0
         meta_segments: list[dict[str, Any]] = []
 
-        out_dir = _WORK / f"dub_{job.id}"
+        out_dir = _job_work_dir(job) / "dub"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         for i, seg in enumerate(segs):
@@ -1638,15 +1751,24 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
 @app.on_event("startup")
 async def _startup() -> None:
-    global _loop
+    global _loop, _cleanup_task
     _loop = asyncio.get_running_loop()
+    await asyncio.to_thread(_cleanup_expired_user_files)
+    _cleanup_task = asyncio.create_task(_periodic_cleanup())
     _warm_model()
     _warm_tts_daemon()
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    if _cleanup_task is not None:
+        _cleanup_task.cancel()
 
 
 def _warm_model() -> None:
@@ -1730,6 +1852,88 @@ class AdminSettingsRequest(BaseModel):
     clear_translation_api_key: bool = False
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    display_name: str = ""
+    password: str
+    terms_accepted: bool = False
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_DAYS * 24 * 3600,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite="lax",
+        path="/",
+    )
+
+
+@app.post("/auth/register")
+async def register(req: RegisterRequest, response: Response) -> dict[str, Any]:
+    if not req.terms_accepted:
+        raise HTTPException(status_code=400, detail="Zaakceptuj regulamin i politykę prywatności")
+    try:
+        user = AUTH_STORE.register(req.email, req.display_name, req.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    token, _ = AUTH_STORE.create_session(user.id)
+    _user_work_dir(user.id)
+    _set_session_cookie(response, token)
+    return {"user": _public_user(user)}
+
+
+@app.post("/auth/login")
+async def login(req: LoginRequest, response: Response) -> dict[str, Any]:
+    user = AUTH_STORE.authenticate(req.email, req.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Nieprawidłowy e-mail lub hasło")
+    token, _ = AUTH_STORE.create_session(user.id)
+    _set_session_cookie(response, token)
+    return {"user": _public_user(user)}
+
+
+@app.post("/auth/logout")
+async def logout(request: Request, response: Response) -> dict[str, bool]:
+    AUTH_STORE.delete_session(request.cookies.get(SESSION_COOKIE, ""))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+async def auth_me(user: User = Depends(_current_user)) -> dict[str, Any]:
+    return {"user": _public_user(user)}
+
+
+@app.delete("/account/files")
+async def delete_account_files(user: User = Depends(_current_user)) -> dict[str, Any]:
+    active = [
+        job for job in _jobs.values()
+        if job.owner_id == user.id and job.status in {"pending", "running"}
+    ]
+    if active:
+        raise HTTPException(status_code=409, detail="Poczekaj na zakończenie aktywnych zadań")
+    user_root = _WORK / "users" / user.id
+    removed_bytes = sum((p.stat().st_size for p in user_root.rglob("*") if p.is_file()), 0) if user_root.exists() else 0
+    shutil.rmtree(user_root, ignore_errors=True)
+    for job_id in [job.id for job in _jobs.values() if job.owner_id == user.id]:
+        _jobs.pop(job_id, None)
+    for label, owner_id in list(_CUSTOM_SPEAKER_OWNER.items()):
+        if owner_id == user.id:
+            _CUSTOM_SPEAKER_OWNER.pop(label, None)
+            _SPEAKER_MEL.pop(label, None)
+            _SPEAKER_LIST[:] = [entry for entry in _SPEAKER_LIST if entry.get("label") != label]
+    _user_work_dir(user.id)
+    return {"ok": True, "removed_bytes": removed_bytes}
+
+
 @app.get("/admin/settings")
 async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, Any]:
     _require_admin(x_admin_token)
@@ -1760,6 +1964,7 @@ async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, A
             "segments": segment_debug,
         })
     api_key = str(core._CONFIG.get("translation_api_key", ""))
+    auth_stats = AUTH_STORE.stats()
     return {
         "translation_endpoint": str(core._CONFIG.get("translation_endpoint", "")),
         "translation_model": str(core._CONFIG.get("translation_model", "")),
@@ -1774,6 +1979,9 @@ async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, A
         ),
         "model_ready": _MODEL_READY.is_set(),
         "tts_ready": _TTS_READY.is_set(),
+        "registered_users": auth_stats["users"],
+        "active_sessions": auth_stats["active_sessions"],
+        "data_retention_hours": DATA_RETENTION_HOURS,
         "recent_jobs": recent_jobs,
     }
 
@@ -1802,7 +2010,7 @@ async def update_admin_settings(
 
 
 @app.get("/tts_models")
-async def tts_models() -> dict[str, Any]:
+async def tts_models(user: User = Depends(_current_user)) -> dict[str, Any]:
     return {
         "default": DEFAULT_TTS_PROFILE,
         "active": _daemon_active_profile or DEFAULT_TTS_PROFILE,
@@ -1833,16 +2041,15 @@ async def tts_models() -> dict[str, Any]:
 async def transcribe(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    user: User = Depends(_current_user),
 ) -> dict[str, str]:
     suffix = Path(file.filename or "audio").suffix or ".wav"
-    uid = uuid.uuid4().hex
-    upload_path = _WORK / f"up_{uid}{suffix}"
+    job = _new_job(user, "transcribe")
+    upload_path = _job_work_dir(job) / f"source{suffix}"
     with upload_path.open("wb") as fh:
         shutil.copyfileobj(file.file, fh)
-    job = Job(id=uid, kind="transcribe")
-    _jobs[uid] = job
     _executor.submit(_worker_transcribe, job, upload_path)
-    return {"job_id": uid}
+    return {"job_id": job.id}
 
 
 class YoutubeTranscribeRequest(BaseModel):
@@ -1850,34 +2057,32 @@ class YoutubeTranscribeRequest(BaseModel):
 
 
 @app.post("/transcribe_youtube")
-async def transcribe_youtube(req: YoutubeTranscribeRequest) -> dict[str, str]:
+async def transcribe_youtube(
+    req: YoutubeTranscribeRequest,
+    user: User = Depends(_current_user),
+) -> dict[str, str]:
     url = str(req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Brak URL YouTube")
-    uid = uuid.uuid4().hex
-    job = Job(id=uid, kind="transcribe")
-    _jobs[uid] = job
+    job = _new_job(user, "transcribe")
     _executor.submit(_worker_transcribe_youtube, job, url)
-    return {"job_id": uid}
+    return {"job_id": job.id}
 
 
 @app.post("/translate")
 async def translate(
     background_tasks: BackgroundTasks,
     req: TranslateRequest,
+    user: User = Depends(_current_user),
 ) -> dict[str, str]:
-    uid = uuid.uuid4().hex
-    job = Job(id=uid, kind="translate")
-    _jobs[uid] = job
+    job = _new_job(user, "translate")
     _executor.submit(_worker_translate, job, req)
-    return {"job_id": uid}
+    return {"job_id": job.id}
 
 
 @app.get("/jobs/{job_id}")
-async def get_job(job_id: str) -> dict[str, Any]:
-    job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def get_job(job_id: str, user: User = Depends(_current_user)) -> dict[str, Any]:
+    job = _require_job(job_id, user)
     return {
         "id": job.id,
         "kind": job.kind,
@@ -1890,8 +2095,13 @@ async def get_job(job_id: str) -> dict[str, Any]:
 
 
 @app.get("/speakers")
-async def list_speakers() -> dict[str, Any]:
-    return {"speakers": _SPEAKER_LIST}
+async def list_speakers(user: User = Depends(_current_user)) -> dict[str, Any]:
+    return {
+        "speakers": [
+            entry for entry in _SPEAKER_LIST
+            if not entry.get("custom") or _CUSTOM_SPEAKER_OWNER.get(str(entry.get("label", ""))) == user.id
+        ]
+    }
 
 
 @app.post("/voice_prompt")
@@ -1899,20 +2109,24 @@ async def upload_voice_prompt(
     file: UploadFile = File(...),
     start_sec: float = Form(0.0),
     max_sec: float = Form(12.0),
+    user: User = Depends(_current_user),
 ) -> dict[str, Any]:
     uid = uuid.uuid4().hex[:10]
     suffix = Path(file.filename or "prompt.wav").suffix or ".wav"
-    src = _WORK / f"voice_prompt_upload_{uid}{suffix}"
+    prompt_dir = _user_work_dir(user.id) / "voice_prompts" / uid
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    src = prompt_dir / f"source{suffix}"
     with src.open("wb") as fh:
         shutil.copyfileobj(file.file, fh)
-    wav24 = _convert_media_to_mono24k(src, _WORK)
-    enc = _daemon_encode_ref_mel(wav24, _WORK / "voice_prompts", start_sec=float(start_sec), max_sec=float(max_sec))
+    wav24 = _convert_media_to_mono24k(src, prompt_dir)
+    enc = _daemon_encode_ref_mel(wav24, prompt_dir, start_sec=float(start_sec), max_sec=float(max_sec))
     mel_path = str(enc.get("mel", ""))
     if not mel_path or not Path(mel_path).exists():
         raise HTTPException(status_code=500, detail="Nie udało się utworzyć mel promptu")
     raw_name = Path(file.filename or "custom").stem[:48] or "custom"
     label = f"[custom] {raw_name} [{uid}]"
     _SPEAKER_MEL[label] = mel_path
+    _CUSTOM_SPEAKER_OWNER[label] = user.id
     entry = {"label": label, "id": 100000 + len(_SPEAKER_LIST), "custom": True}
     _SPEAKER_LIST.insert(0, entry)
     return {
@@ -1947,7 +2161,7 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
         _push(job, {"type": "progress", "progress": 0.05, "message": "Przygotowuję TTS…"})
 
         speaker_payload = _speaker_condition_payload(req.speaker_label)
-        out_dir = _WORK / f"tts_{job.id}"
+        out_dir = _job_work_dir(job) / "tts"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         _push(job, {"type": "progress", "progress": 0.15, "message": "Syntetyzuję (czeka na daemon)…"})
@@ -2039,28 +2253,30 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
 
 
 @app.post("/tts_text")
-async def tts_text(req: TextTTSRequest) -> dict[str, str]:
-    uid = uuid.uuid4().hex
-    job = Job(id=uid, kind="tts_text")
-    _jobs[uid] = job
+async def tts_text(req: TextTTSRequest, user: User = Depends(_current_user)) -> dict[str, str]:
+    owner_id = _CUSTOM_SPEAKER_OWNER.get(req.speaker_label)
+    if owner_id is not None and owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Speaker not found")
+    job = _new_job(user, "tts_text")
     _executor.submit(_worker_tts_text, job, req)
-    return {"job_id": uid}
+    return {"job_id": job.id}
 
 
 @app.post("/dub")
-async def dub(req: DubRequest) -> dict[str, str]:
-    uid = uuid.uuid4().hex
-    job = Job(id=uid, kind="dub")
-    _jobs[uid] = job
+async def dub(req: DubRequest, user: User = Depends(_current_user)) -> dict[str, str]:
+    if req.transcribe_job_id:
+        _require_job(req.transcribe_job_id, user)
+    owner_id = _CUSTOM_SPEAKER_OWNER.get(req.speaker_label)
+    if owner_id is not None and owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Speaker not found")
+    job = _new_job(user, "dub")
     _executor.submit(_worker_dub, job, req)
-    return {"job_id": uid}
+    return {"job_id": job.id}
 
 
 @app.get("/jobs/{job_id}/audio")
-async def job_audio(job_id: str) -> StreamingResponse:
-    job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def job_audio(job_id: str, user: User = Depends(_current_user)) -> StreamingResponse:
+    job = _require_job(job_id, user)
     if job.status != "done" or job.result is None:
         raise HTTPException(status_code=409, detail="Job not finished")
     audio_path = Path(job.result.get("audio_path", ""))
@@ -2074,10 +2290,8 @@ async def job_audio(job_id: str) -> StreamingResponse:
 
 
 @app.get("/jobs/{job_id}/mix_audio")
-async def job_mix_audio(job_id: str) -> StreamingResponse:
-    job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def job_mix_audio(job_id: str, user: User = Depends(_current_user)) -> StreamingResponse:
+    job = _require_job(job_id, user)
     if job.status != "done" or job.result is None:
         raise HTTPException(status_code=409, detail="Job not finished")
     audio_path = Path(str(job.result.get("mixed_audio_path", "")))
@@ -2091,10 +2305,8 @@ async def job_mix_audio(job_id: str) -> StreamingResponse:
 
 
 @app.get("/jobs/{job_id}/source")
-async def job_source(job_id: str) -> FileResponse:
-    job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def job_source(job_id: str, user: User = Depends(_current_user)) -> FileResponse:
+    job = _require_job(job_id, user)
     if job.status != "done" or job.result is None:
         raise HTTPException(status_code=409, detail="Job not finished")
     source_path = Path(str(job.result.get("upload_path", "")))
@@ -2105,11 +2317,13 @@ async def job_source(job_id: str) -> FileResponse:
 
 @app.get("/mix_video")
 @app.post("/mix_video")
-async def mix_video(dub_job_id: str, transcribe_job_id: str) -> StreamingResponse:
-    dub_job = _jobs.get(dub_job_id)
-    asr_job = _jobs.get(transcribe_job_id)
-    if dub_job is None or asr_job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def mix_video(
+    dub_job_id: str,
+    transcribe_job_id: str,
+    user: User = Depends(_current_user),
+) -> StreamingResponse:
+    dub_job = _require_job(dub_job_id, user)
+    asr_job = _require_job(transcribe_job_id, user)
     if dub_job.status != "done" or dub_job.result is None:
         raise HTTPException(status_code=409, detail="Dub job not finished")
     dubbed_wav = Path(
@@ -2139,10 +2353,8 @@ async def mix_video(dub_job_id: str, transcribe_job_id: str) -> StreamingRespons
 
 
 @app.get("/jobs/{job_id}/stream")
-async def stream_job(job_id: str) -> StreamingResponse:
-    job = _jobs.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def stream_job(job_id: str, user: User = Depends(_current_user)) -> StreamingResponse:
+    job = _require_job(job_id, user)
     if job.status == "done" and job.result is not None:
         await job.queue.put({"type": "done", "progress": 1.0, "result": job.result})
     elif job.status == "error":
@@ -2158,11 +2370,30 @@ async def stream_job(job_id: str) -> StreamingResponse:
 if UI_OUT.exists():
     app.mount("/_next", StaticFiles(directory=UI_OUT / "_next"), name="nextjs-chunks")
 
+    @app.get("/robots.txt", include_in_schema=False)
+    async def robots(request: Request) -> PlainTextResponse:
+        base = str(request.base_url).rstrip("/")
+        return PlainTextResponse(f"User-agent: *\nAllow: /\nSitemap: {base}/sitemap.xml\n")
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    async def sitemap(request: Request) -> Response:
+        base = str(request.base_url).rstrip("/")
+        body = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            f'<url><loc>{base}/</loc></url><url><loc>{base}/en</loc></url>'
+            '</urlset>'
+        )
+        return Response(content=body, media_type="application/xml")
+
     @app.get("/{full_path:path}")
     async def spa(full_path: str) -> FileResponse:
         candidate = UI_OUT / full_path
         if candidate.is_file():
             return FileResponse(candidate)
+        exported_page = UI_OUT / f"{full_path.rstrip('/')}.html"
+        if full_path and exported_page.is_file():
+            return FileResponse(exported_page)
         html = UI_OUT / full_path / "index.html"
         if html.is_file():
             return FileResponse(html)

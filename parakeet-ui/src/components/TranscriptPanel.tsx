@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import type { Segment, Word, TranscribeResult } from '@/lib/types';
+import { useLocale } from '@/lib/locale';
 
 interface Props {
   result: TranscribeResult;
@@ -21,6 +22,7 @@ function srtTs(s: number) {
 }
 
 export default function TranscriptPanel({ result, audioSrc }: Props) {
+  const { locale, t } = useLocale();
   const [tab, setTab] = useState<Tab>('transcript');
   const [activeWord, setActiveWord] = useState(-1);
   const [activeSeg, setActiveSeg] = useState(-1);
@@ -71,26 +73,26 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
   };
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'transcript', label: 'Transkrypcja' },
-    { id: 'segments', label: `Segmenty (${result.segment_count})` },
-    { id: 'timeline', label: 'Oś czasu' },
+    { id: 'transcript', label: t('transcribe') },
+    { id: 'segments', label: `${locale === 'pl' ? 'Segmenty' : 'Segments'} (${result.segment_count})` },
+    { id: 'timeline', label: locale === 'pl' ? 'Oś czasu' : 'Timeline' },
   ];
 
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
-        <h2 className="text-base font-semibold">Źródło</h2>
+        <h2 className="text-base font-semibold">{t('materialSource')}</h2>
         <span className="bg-accent-dim text-blue-200 text-xs font-bold px-2 py-0.5 rounded">
           {(result.detected_language || 'auto').toUpperCase()}
         </span>
         <span className="text-xs text-muted">
-          {result.word_count} słów · {result.segment_count} segmentów · {fmt(result.duration)}
+          {result.word_count} {locale === 'pl' ? 'słów' : 'words'} · {result.segment_count} {locale === 'pl' ? 'segmentów' : 'segments'} · {fmt(result.duration)}
         </span>
         <div className="ml-auto flex gap-2">
           <button onClick={() => navigator.clipboard.writeText(result.transcript)}
             className="text-xs px-3 py-1 rounded bg-surface2 border border-border hover:bg-border transition-colors">
-            Kopiuj
+            {t('copy')}
           </button>
           <button onClick={exportSrt}
             className="text-xs px-3 py-1 rounded bg-surface2 border border-border hover:bg-border transition-colors">

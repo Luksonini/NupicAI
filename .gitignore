@@ -4,6 +4,7 @@ __pycache__/
 .env
 parakeet_config.json
 admin_config.json
+runtime/
 parakeet-ui/node_modules/
 parakeet-ui/.next/
 translate/outputs/

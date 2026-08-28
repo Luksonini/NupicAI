@@ -12,6 +12,7 @@ import {
   dubAudioUrl, mixAudioUrl, mixVideoUrl,
 } from '@/lib/api';
 import JobProgress from './JobProgress';
+import { useLocale } from '@/lib/locale';
 
 interface Props {
   segments: Segment[];
@@ -36,6 +37,7 @@ function fmt(s: number) {
 }
 
 export default function TTSPanel({ segments, targetLang, transcribeJobId, originalSrc, hasVideo }: Props) {
+  const { locale, t } = useLocale();
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
@@ -67,7 +69,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   }, []);
 
   const run = async () => {
-    setRunning(true); setError(''); setProgress(0); setMessage('Przygotowuję rendering…');
+    setRunning(true); setError(''); setProgress(0); setMessage(locale === 'pl' ? 'Przygotowuję rendering…' : 'Preparing render…');
     try {
       const jobId = await submitDub({
         segments: editableSegments, speaker_label: speaker, tts_model_profile: ttsModel,
@@ -91,7 +93,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
 
   const addVoicePrompt = async (file: File | null) => {
     if (!file) return;
-    setPromptStatus('Koduję próbkę głosu…'); setError('');
+    setPromptStatus(locale === 'pl' ? 'Koduję próbkę głosu…' : 'Encoding voice sample…'); setError('');
     try {
       const custom = await uploadVoicePrompt(file);
       setSpeakers(prev => [custom, ...prev.filter(item => item.label !== custom.label)]);
@@ -116,11 +118,11 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
       <section className="dub-main">
         <div className="media-stage">
           <div className="section-toolbar">
-            <div className="panel-heading compact"><span className="icon-box"><Play size={18} /></span><div><h2>Podgląd</h2><p>{fmt(segments.at(-1)?.end ?? 0)} materiału</p></div></div>
+            <div className="panel-heading compact"><span className="icon-box"><Play size={18} /></span><div><h2>{t('preview')}</h2><p>{fmt(segments.at(-1)?.end ?? 0)}</p></div></div>
             {result && <div className="segmented-control">
-              <button className={audioMode === 'original' ? 'active' : ''} onClick={() => setAudioMode('original')}>Oryginał</button>
-              <button className={audioMode === 'mix' ? 'active' : ''} onClick={() => setAudioMode('mix')}>Miks</button>
-              <button className={audioMode === 'voice' ? 'active' : ''} onClick={() => setAudioMode('voice')}>Sam dubbing</button>
+              <button className={audioMode === 'original' ? 'active' : ''} onClick={() => setAudioMode('original')}>{t('original')}</button>
+              <button className={audioMode === 'mix' ? 'active' : ''} onClick={() => setAudioMode('mix')}>{t('mix')}</button>
+              <button className={audioMode === 'voice' ? 'active' : ''} onClick={() => setAudioMode('voice')}>{t('voiceOnly')}</button>
             </div>}
           </div>
           {hasVideo ? (
@@ -130,16 +132,16 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
 
         {result && <div className={`render-summary ${warningCount ? 'warning' : ''}`}>
           {warningCount ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-          <div><strong>{warningCount ? `${warningCount} segmentów wymaga odsłuchu` : 'Rendering gotowy'}</strong><span>{result.duration.toFixed(1)} s · {editableSegments.length} segmentów</span></div>
+          <div><strong>{warningCount ? `${warningCount} ${locale === 'pl' ? 'segmentów wymaga odsłuchu' : 'segments need review'}` : (locale === 'pl' ? 'Rendering gotowy' : 'Render complete')}</strong><span>{result.duration.toFixed(1)} s · {editableSegments.length} {locale === 'pl' ? 'segmentów' : 'segments'}</span></div>
           <div className="download-group">
-            <a className="button button-secondary" href={voiceUrl} download="dubbing.wav"><Download size={15} />Głos</a>
-            {result.mixed_audio_path && <a className="button button-secondary" href={mixedUrl} download="mix.wav"><Download size={15} />Miks WAV</a>}
-            {hasVideo && <a className="button button-primary" href={mixVideoUrl(dubJobId, transcribeJobId)} download="dubbing.mp4"><Download size={15} />Film MP4</a>}
+            <a className="button button-secondary" href={voiceUrl} download="dubbing.wav"><Download size={15} />{locale === 'pl' ? 'Głos' : 'Voice'}</a>
+            {result.mixed_audio_path && <a className="button button-secondary" href={mixedUrl} download="mix.wav"><Download size={15} />{t('mix')} WAV</a>}
+            {hasVideo && <a className="button button-primary" href={mixVideoUrl(dubJobId, transcribeJobId)} download="dubbing.mp4"><Download size={15} />MP4</a>}
           </div>
         </div>}
 
         <div className="segment-editor">
-          <div className="section-toolbar"><div><h2>Segmenty dubbingu</h2><p>{editableSegments.length} pozycji</p></div></div>
+          <div className="section-toolbar"><div><h2>{t('dubbingSegments')}</h2><p>{editableSegments.length}</p></div></div>
           <div className="segment-table">
             {editableSegments.map((seg, i) => {
               const budget = Math.max(0.1, Number(seg.end) - Number(seg.start));
@@ -149,7 +151,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
                 <div className="segment-copy"><p className="source-line">{seg.source_text ?? seg.text}</p>
                   <textarea value={seg.translation ?? seg.text} onChange={e => setEditableSegments(prev => prev.map((item, idx) => idx === i ? { ...item, translation: e.target.value } : item))} />
                 </div>
-                <span className={`density-indicator ${charsPerSec > 19 ? 'risk' : ''}`} title="Gęstość tekstu względem czasu">{charsPerSec.toFixed(1)} zn./s</span>
+                <span className={`density-indicator ${charsPerSec > 19 ? 'risk' : ''}`} title={locale === 'pl' ? 'Gęstość tekstu względem czasu' : 'Text density against available time'}>{charsPerSec.toFixed(1)} {locale === 'pl' ? 'zn./s' : 'char/s'}</span>
               </article>;
             })}
           </div>
@@ -158,31 +160,31 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
 
       <aside className="dub-inspector">
         <section className="inspector-section">
-          <div className="inspector-title"><Mic2 size={17} /><h3>Głos</h3></div>
-          <label><span className="field-label">Lektor</span><select value={speaker} onChange={e => setSpeaker(e.target.value)}>
+          <div className="inspector-title"><Mic2 size={17} /><h3>{locale === 'pl' ? 'Głos' : 'Voice'}</h3></div>
+          <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)}>
             {speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.label}</option>)}
           </select></label>
-          <label className="upload-button"><Upload size={15} /><span>Dodaj próbkę głosu</span><input type="file" className="sr-only" accept="audio/*,video/*" onChange={e => void addVoicePrompt(e.target.files?.[0] ?? null)} /></label>
+          <label className="upload-button"><Upload size={15} /><span>{t('addVoice')}</span><input type="file" className="sr-only" accept="audio/*,video/*" onChange={e => void addVoicePrompt(e.target.files?.[0] ?? null)} /></label>
           {promptStatus && <p className="mini-success"><CheckCircle2 size={14} />{promptStatus}</p>}
         </section>
 
         <section className="inspector-section">
-          <div className="inspector-title"><Gauge size={17} /><h3>Tempo</h3></div>
-          <Slider label="Bazowe" value={baseSpeed} display={`${baseSpeed.toFixed(2)}×`} min={0.75} max={1.35} step={0.05} onChange={setBaseSpeed} />
-          <Slider label="Maksymalne dopasowanie" value={maxSpeed} display={`${maxSpeed.toFixed(2)}×`} min={1} max={1.3} step={0.05} onChange={setMaxSpeed} />
+          <div className="inspector-title"><Gauge size={17} /><h3>{t('tempo')}</h3></div>
+          <Slider label={locale === 'pl' ? 'Bazowe' : 'Base'} value={baseSpeed} display={`${baseSpeed.toFixed(2)}×`} min={0.75} max={1.35} step={0.05} onChange={setBaseSpeed} />
+          <Slider label={locale === 'pl' ? 'Maksymalne dopasowanie' : 'Maximum fitting'} value={maxSpeed} display={`${maxSpeed.toFixed(2)}×`} min={1} max={1.3} step={0.05} onChange={setMaxSpeed} />
         </section>
 
         <section className="inspector-section">
-          <div className="inspector-title"><SlidersHorizontal size={17} /><h3>Miks</h3></div>
-          <Slider label="Tło oryginału" value={originalGain} display={`${Math.round(originalGain * 100)}%`} min={0} max={1} step={0.01} onChange={setOriginalGain} />
+          <div className="inspector-title"><SlidersHorizontal size={17} /><h3>{t('mix')}</h3></div>
+          <Slider label={locale === 'pl' ? 'Tło oryginału' : 'Original background'} value={originalGain} display={`${Math.round(originalGain * 100)}%`} min={0} max={1} step={0.01} onChange={setOriginalGain} />
           <Slider label="Dubbing" value={dubbingGain} display={`${Math.round(dubbingGain * 100)}%`} min={0.5} max={1.3} step={0.01} onChange={setDubbingGain} />
           <Slider label="Ducking" value={ducking} display={`${Math.round(ducking * 100)}%`} min={0} max={1} step={0.01} onChange={setDucking} />
-          <div className="mix-meter"><Music2 size={14} /><span>Oryginalna ścieżka pozostaje w tle</span><Volume2 size={14} /></div>
+          <div className="mix-meter"><Music2 size={14} /><span>{t('originalBackground')}</span><Volume2 size={14} /></div>
         </section>
 
         {(running || error) && <JobProgress message={message} progress={progress} error={error || undefined} />}
         <button className="button button-primary render-button" onClick={() => void run()} disabled={running || !speaker || !ttsModel}>
-          <WandSparkles size={17} />{running ? 'Renderuję…' : result ? 'Renderuj ponownie' : 'Renderuj dubbing'}
+          <WandSparkles size={17} />{running ? (locale === 'pl' ? 'Renderuję…' : 'Rendering…') : result ? (locale === 'pl' ? 'Renderuj ponownie' : 'Render again') : (locale === 'pl' ? 'Renderuj dubbing' : 'Render dubbing')}
         </button>
       </aside>
     </div>

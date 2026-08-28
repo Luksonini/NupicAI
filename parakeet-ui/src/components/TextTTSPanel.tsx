@@ -5,6 +5,7 @@ import { Download, Mic2, Play, WandSparkles } from 'lucide-react';
 import type { Speaker, TTSResult } from '@/lib/types';
 import { listSpeakers, listTTSModels, streamJob } from '@/lib/api';
 import JobProgress from './JobProgress';
+import { useLocale } from '@/lib/locale';
 
 async function submitTextTTS(params: Record<string, unknown>): Promise<string> {
   const res = await fetch('/tts_text', {
@@ -18,6 +19,7 @@ async function submitTextTTS(params: Record<string, unknown>): Promise<string> {
 }
 
 export default function TextTTSPanel() {
+  const { t } = useLocale();
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
@@ -60,17 +62,17 @@ export default function TextTTSPanel() {
 
   return <div className="voice-studio-grid">
     <section className="panel voice-editor">
-      <div className="panel-heading"><span className="icon-box"><Mic2 size={18} /></span><div><h2>Studio głosu</h2><p>Synteza pojedynczej wypowiedzi</p></div></div>
-      <textarea className="voice-textarea" rows={9} value={text} onChange={e => setText(e.target.value)} placeholder="Tekst do syntezy" />
+      <div className="panel-heading"><span className="icon-box"><Mic2 size={18} /></span><div><h2>{t('voiceStudio')}</h2><p>{t('singleSpeech')}</p></div></div>
+      <textarea className="voice-textarea" rows={9} value={text} onChange={e => setText(e.target.value)} placeholder={t('synthesisText')} />
       <div className="character-count">{text.length} znaków</div>
     </section>
     <aside className="panel voice-controls">
-      <label><span className="field-label">Lektor</span><select value={speaker} onChange={e => setSpeaker(e.target.value)}>{speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.label}</option>)}</select></label>
-      <label><span className="field-label">Język</span><select value={lang} onChange={e => setLang(e.target.value)}><option value="pl">Polski</option><option value="en">English</option></select></label>
-      <label className="slider-field"><span><b>Tempo</b><output>{speed.toFixed(2)}×</output></span><input type="range" min={0.7} max={1.5} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} /></label>
+      <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)}>{speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.label}</option>)}</select></label>
+      <label><span className="field-label">{t('language')}</span><select value={lang} onChange={e => setLang(e.target.value)}><option value="pl">Polski</option><option value="en">English</option></select></label>
+      <label className="slider-field"><span><b>{t('tempo')}</b><output>{speed.toFixed(2)}×</output></span><input type="range" min={0.7} max={1.5} step={0.05} value={speed} onChange={e => setSpeed(Number(e.target.value))} /></label>
       {(running || error) && <JobProgress message={message} progress={progress} error={error || undefined} />}
-      <button className="button button-primary render-button" disabled={running || !text.trim() || !speaker || !ttsModel} onClick={() => void run()}><WandSparkles size={17} />{running ? 'Syntetyzuję…' : 'Generuj mowę'}</button>
-      {audioUrl && <div className="voice-result"><div><Play size={16} /><span>Gotowe · {duration.toFixed(1)} s</span></div><audio controls autoPlay src={audioUrl} /><a className="button button-secondary" href={audioUrl} download={`tts_${jobId}.wav`}><Download size={15} />Pobierz WAV</a></div>}
+      <button className="button button-primary render-button" disabled={running || !text.trim() || !speaker || !ttsModel} onClick={() => void run()}><WandSparkles size={17} />{running ? t('synthesizing') : t('generateSpeech')}</button>
+      {audioUrl && <div className="voice-result"><div><Play size={16} /><span>OK · {duration.toFixed(1)} s</span></div><audio controls autoPlay src={audioUrl} /><a className="button button-secondary" href={audioUrl} download={`tts_${jobId}.wav`}><Download size={15} />{t('downloadWav')}</a></div>}
     </aside>
   </div>;
 }

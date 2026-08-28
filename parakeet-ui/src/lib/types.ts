@@ -85,6 +85,14 @@ export interface JobEvent {
 
 export type Step = 'idle' | 'transcribing' | 'transcribed' | 'translating' | 'translated' | 'error';
 
+export interface User {
+  id: string;
+  email: string;
+  display_name: string;
+  created_at: number;
+  data_retention_hours: number;
+}
+
 export interface Speaker { label: string; id: number; }
 
 export interface TTSModelProfile {
@@ -144,6 +152,9 @@ export interface AdminSettings {
   tts_loaded_profiles: string[];
   model_ready: boolean;
   tts_ready: boolean;
+  registered_users: number;
+  active_sessions: number;
+  data_retention_hours: number;
   recent_jobs: AdminJob[];
 }
 

@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, AudioLines, ChevronRight, FileAudio, Languages, Menu, Mic2,
-  PanelLeftClose, Plus, Settings, ShieldCheck, Upload, Youtube,
+  PanelLeftClose, Plus, ShieldCheck, Upload, UserRound, Youtube,
 } from 'lucide-react';
-import type { TranscribeResult, TranslateResult, Step } from '@/lib/types';
-import { uploadAndTranscribe, transcribeYoutube, sourceUrl, streamJob, checkHealth } from '@/lib/api';
+import type { TranscribeResult, TranslateResult, Step, User } from '@/lib/types';
+import { uploadAndTranscribe, transcribeYoutube, sourceUrl, streamJob, checkHealth, currentUser } from '@/lib/api';
 import DropZone from '@/components/DropZone';
 import JobProgress from '@/components/JobProgress';
 import TranscriptPanel from '@/components/TranscriptPanel';
@@ -14,14 +14,18 @@ import TranslatePanel from '@/components/TranslatePanel';
 import TTSPanel from '@/components/TTSPanel';
 import TextTTSPanel from '@/components/TextTTSPanel';
 import AdminPanel from '@/components/AdminPanel';
+import AccountPanel from '@/components/AccountPanel';
+import LandingPage from '@/components/LandingPage';
+import { LanguageSwitch, LocaleProvider, type Locale, useLocale } from '@/lib/locale';
 
-type Service = 'transcribe' | 'translate' | 'dub' | 'voice' | 'admin';
+type Service = 'transcribe' | 'translate' | 'dub' | 'voice' | 'account' | 'admin';
 
 const SERVICES = [
   { id: 'transcribe' as const, label: 'Transkrypcja', icon: FileAudio },
   { id: 'translate' as const, label: 'Tłumaczenie', icon: Languages },
   { id: 'dub' as const, label: 'Dubbing', icon: AudioLines },
   { id: 'voice' as const, label: 'Studio głosu', icon: Mic2 },
+  { id: 'account' as const, label: 'Moje konto', icon: UserRound },
   { id: 'admin' as const, label: 'Administrator', icon: ShieldCheck },
 ];
 
@@ -30,10 +34,31 @@ const SERVICE_META: Record<Service, { title: string; caption: string }> = {
   translate: { title: 'Tłumaczenie', caption: 'Tekst źródłowy i wersja docelowa' },
   dub: { title: 'Dubbing', caption: 'Głosy, segmenty i miks końcowy' },
   voice: { title: 'Studio głosu', caption: 'Synteza mowy z tekstu' },
+  account: { title: 'Moje konto', caption: 'Profil, sesja i prywatność danych' },
   admin: { title: 'Administrator', caption: 'Modele, integracje i diagnostyka' },
 };
 
 export default function Home() {
+  return <NupicAIApp initialLocale="pl" />;
+}
+
+export function NupicAIApp({ initialLocale }: { initialLocale: Locale }) {
+  return <LocaleProvider initialLocale={initialLocale}><AuthenticatedApp /></LocaleProvider>;
+}
+
+function AuthenticatedApp() {
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    currentUser().then(setUser).catch(() => setUser(null));
+  }, []);
+
+  if (!user) return <LandingPage onAuthenticated={setUser} />;
+  return <Studio user={user} onLogout={() => setUser(null)} />;
+}
+
+function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { locale, t } = useLocale();
   const [service, setService] = useState<Service>('transcribe');
   const [railOpen, setRailOpen] = useState(true);
   const [health, setHealth] = useState<boolean | null>(null);
@@ -71,15 +96,15 @@ export default function Home() {
 
   const runTranscriptionJob = async (createJob: () => Promise<string>, nextAudioSrc?: (jobId: string) => string) => {
     abortRef.current?.abort(); const ctrl = new AbortController(); abortRef.current = ctrl;
-    setStep('transcribing'); setProgress(0); setMessage('Analizuję materiał…'); setError('');
+    setStep('transcribing'); setProgress(0); setMessage(locale === 'pl' ? 'Analizuję materiał…' : 'Analyzing media…'); setError('');
     try {
       const jobId = await createJob(); setTranscribeJobId(jobId);
       await new Promise<void>((resolve, reject) => {
-        ctrl.signal.addEventListener('abort', () => reject(new Error('Przerwano')));
+        ctrl.signal.addEventListener('abort', () => reject(new Error(locale === 'pl' ? 'Przerwano' : 'Cancelled')));
         streamJob(jobId, ev => {
           if (ev.type === 'progress') { setProgress(ev.progress ?? 0); setMessage(ev.message ?? ''); }
           else if (ev.type === 'done') { setTranscribeResult(ev.result as TranscribeResult); resolve(); }
-          else if (ev.type === 'error') reject(new Error(ev.error ?? 'Błąd transkrypcji'));
+          else if (ev.type === 'error') reject(new Error(ev.error ?? (locale === 'pl' ? 'Błąd transkrypcji' : 'Transcription error')));
         }, ctrl.signal);
       });
       if (nextAudioSrc) setAudioSrc(nextAudioSrc(jobId));
@@ -98,7 +123,7 @@ export default function Home() {
   };
 
   const isVideo = sourceKind === 'youtube' || !!file && (file.type.startsWith('video/') || /\.(mp4|mkv|webm|avi|mov)$/i.test(file.name));
-  const projectName = useMemo(() => file?.name || (youtubeUrl ? 'Materiał YouTube' : 'Nowy projekt'), [file, youtubeUrl]);
+  const projectName = useMemo(() => file?.name || (youtubeUrl ? (locale === 'pl' ? 'Materiał YouTube' : 'YouTube media') : t('newProject')), [file, youtubeUrl, locale, t]);
   const meta = SERVICE_META[service];
 
   const intake = <SourceIntake
@@ -110,34 +135,36 @@ export default function Home() {
   return <div className={`app-shell ${railOpen ? '' : 'rail-collapsed'}`}>
     <aside className="app-rail">
       <BrandMark />
-      <button className="button button-primary new-project" onClick={resetProject}><Plus size={16} /><span>Nowy projekt</span></button>
-      <nav className="service-nav" aria-label="Usługi">
-        <span className="nav-label">Usługi</span>
-        {SERVICES.map(item => <button key={item.id} className={service === item.id ? 'active' : ''} onClick={() => setService(item.id)} title={item.label}>
-          <item.icon size={18} /><span>{item.label}</span>
+      <button className="button button-primary new-project" onClick={resetProject}><Plus size={16} /><span>{t('newProject')}</span></button>
+      <nav className="service-nav" aria-label={t('services')}>
+        <span className="nav-label">{t('services')}</span>
+        {SERVICES.map(item => <button key={item.id} className={service === item.id ? 'active' : ''} onClick={() => setService(item.id)} title={t(item.id)}>
+          <item.icon size={18} /><span>{t(item.id)}</span>
           {item.id === 'transcribe' && transcribeResult && <i />}
           {item.id === 'translate' && translateResult && <i />}
         </button>)}
       </nav>
       <div className="rail-project">
-        <span className="nav-label">Bieżący projekt</span>
-        <div className="project-chip"><FileAudio size={16} /><div><strong>{projectName}</strong><span>{transcribeResult ? `${transcribeResult.segment_count} segmentów` : 'Bez transkrypcji'}</span></div></div>
+        <span className="nav-label">{t('currentProject')}</span>
+        <div className="project-chip"><FileAudio size={16} /><div><strong>{projectName}</strong><span>{transcribeResult ? `${transcribeResult.segment_count} ${locale === 'pl' ? 'segmentów' : 'segments'}` : t('noTranscript')}</span></div></div>
       </div>
+      <button className="rail-account" onClick={() => setService('account')} title={t('account')}><UserRound size={17} /><span><strong>{user.display_name}</strong><small>{user.email}</small></span></button>
     </aside>
 
     <div className="app-body">
       <header className="topbar">
-        <button className="icon-button rail-toggle" title="Nawigacja" onClick={() => setRailOpen(v => !v)}>{railOpen ? <PanelLeftClose size={18} /> : <Menu size={18} />}</button>
-        <div className="page-title"><h1>{meta.title}</h1><p>{meta.caption}</p></div>
-        <div className={`server-status ${health === null ? 'checking' : health ? 'online' : 'offline'}`}><Activity size={14} /><span>{health === null ? 'Sprawdzam' : health ? 'System gotowy' : 'System offline'}</span></div>
+        <button className="icon-button rail-toggle" title={t('navigation')} onClick={() => setRailOpen(v => !v)}>{railOpen ? <PanelLeftClose size={18} /> : <Menu size={18} />}</button>
+        <div className="page-title"><h1>{t(service)}</h1><p>{locale === 'pl' ? meta.caption : ({ transcribe: 'Source media and subtitles', translate: 'Source text and target version', dub: 'Voices, segments and final mix', voice: 'Speech synthesis from text', account: 'Profile, session and data privacy', admin: 'Models, integrations and diagnostics' } as Record<Service, string>)[service]}</p></div>
+        <LanguageSwitch compact />
+        <div className={`server-status ${health === null ? 'checking' : health ? 'online' : 'offline'}`}><Activity size={14} /><span>{health === null ? t('checking') : health ? t('systemReady') : t('systemOffline')}</span></div>
       </header>
 
       <main className="workspace">
-        {service !== 'voice' && service !== 'admin' && <PipelineBar service={service} hasTranscript={!!transcribeResult} hasTranslation={!!translateResult} onSelect={setService} />}
+        {service !== 'voice' && service !== 'account' && service !== 'admin' && <PipelineBar service={service} hasTranscript={!!transcribeResult} hasTranslation={!!translateResult} onSelect={setService} />}
 
         {service === 'transcribe' && (!transcribeResult ? intake : <>
-          <div className="workspace-toolbar"><div><h2>{projectName}</h2><p>{transcribeResult.detected_language.toUpperCase()} · {transcribeResult.word_count} słów · {transcribeResult.segment_count} segmentów</p></div>
-            <button className="button button-primary" onClick={() => setService('translate')}>Tłumaczenie <ChevronRight size={16} /></button></div>
+          <div className="workspace-toolbar"><div><h2>{projectName}</h2><p>{transcribeResult.detected_language.toUpperCase()} · {transcribeResult.word_count} {locale === 'pl' ? 'słów' : 'words'} · {transcribeResult.segment_count} {locale === 'pl' ? 'segmentów' : 'segments'}</p></div>
+            <button className="button button-primary" onClick={() => setService('translate')}>{t('translate')} <ChevronRight size={16} /></button></div>
           <section className="panel transcript-surface"><TranscriptPanel result={transcribeResult} audioSrc={audioSrc} /></section>
         </>)}
 
@@ -151,6 +178,7 @@ export default function Home() {
           <TTSPanel segments={translateResult.segments} targetLang={translateResult.target_lang} transcribeJobId={transcribeJobId} originalSrc={audioSrc} hasVideo={isVideo} />)}
 
         {service === 'voice' && <TextTTSPanel />}
+        {service === 'account' && <AccountPanel user={user} onLogout={onLogout} />}
         {service === 'admin' && <AdminPanel />}
       </main>
     </div>
@@ -167,10 +195,11 @@ function BrandMark() {
 }
 
 function PipelineBar({ service, hasTranscript, hasTranslation, onSelect }: { service: Service; hasTranscript: boolean; hasTranslation: boolean; onSelect: (service: Service) => void }) {
+  const { t } = useLocale();
   const steps = [
-    { id: 'transcribe' as const, label: 'Transkrypcja', done: hasTranscript },
-    { id: 'translate' as const, label: 'Tłumaczenie', done: hasTranslation },
-    { id: 'dub' as const, label: 'Dubbing', done: false },
+    { id: 'transcribe' as const, label: t('transcribe'), done: hasTranscript },
+    { id: 'translate' as const, label: t('translate'), done: hasTranslation },
+    { id: 'dub' as const, label: t('dub'), done: false },
   ];
   return <div className="pipeline-bar">{steps.map((item, index) => <div className="pipeline-node" key={item.id}>
     <button className={`${service === item.id ? 'active' : ''} ${item.done ? 'done' : ''}`} onClick={() => onSelect(item.id)}><span>{item.done ? '✓' : index + 1}</span>{item.label}</button>
@@ -182,13 +211,14 @@ function SourceIntake({ file, youtubeUrl, setYoutubeUrl, onFile, transcribe, tra
   file: File | null; youtubeUrl: string; setYoutubeUrl: (value: string) => void; onFile: (file: File) => void;
   transcribe: () => void; transcribeYoutube: () => void; busy: boolean; progress: number; message: string; error: string;
 }) {
+  const { t } = useLocale();
   const [sourceTab, setSourceTab] = useState<'file' | 'youtube'>('file');
   return <div className="intake-layout">
     <section className="panel intake-panel">
-      <div className="panel-heading"><span className="icon-box"><Upload size={18} /></span><div><h2>Materiał źródłowy</h2><p>Audio lub wideo</p></div></div>
-      <div className="segmented-control source-tabs"><button className={sourceTab === 'file' ? 'active' : ''} onClick={() => setSourceTab('file')}><FileAudio size={15} />Plik</button><button className={sourceTab === 'youtube' ? 'active' : ''} onClick={() => setSourceTab('youtube')}><Youtube size={15} />YouTube</button></div>
-      {sourceTab === 'file' ? <><DropZone onFile={onFile} disabled={busy} />{file && <button className="button button-primary intake-action" onClick={transcribe} disabled={busy}><FileAudio size={16} />Transkrybuj materiał</button>}</> :
-        <div className="youtube-source"><label><span className="field-label">Adres filmu</span><div className="field-with-icon"><Youtube size={16} /><input value={youtubeUrl} onChange={e => setYoutubeUrl(e.target.value)} placeholder="https://youtube.com/watch?v=…" /></div></label><button className="button button-primary" onClick={transcribeYoutube} disabled={busy || !youtubeUrl.trim()}>Pobierz i transkrybuj</button></div>}
+      <div className="panel-heading"><span className="icon-box"><Upload size={18} /></span><div><h2>{t('sourceMaterial')}</h2><p>{t('audioVideo')}</p></div></div>
+      <div className="segmented-control source-tabs"><button className={sourceTab === 'file' ? 'active' : ''} onClick={() => setSourceTab('file')}><FileAudio size={15} />{t('file')}</button><button className={sourceTab === 'youtube' ? 'active' : ''} onClick={() => setSourceTab('youtube')}><Youtube size={15} />YouTube</button></div>
+      {sourceTab === 'file' ? <><DropZone onFile={onFile} disabled={busy} />{file && <button className="button button-primary intake-action" onClick={transcribe} disabled={busy}><FileAudio size={16} />{t('transcribeMedia')}</button>}</> :
+        <div className="youtube-source"><label><span className="field-label">{t('movieAddress')}</span><div className="field-with-icon"><Youtube size={16} /><input value={youtubeUrl} onChange={e => setYoutubeUrl(e.target.value)} placeholder="https://youtube.com/watch?v=…" /></div></label><button className="button button-primary" onClick={transcribeYoutube} disabled={busy || !youtubeUrl.trim()}>{t('downloadTranscribe')}</button></div>}
       {(busy || error) && <JobProgress message={message} progress={progress} error={error || undefined} />}
     </section>
     <aside className="intake-summary"><div><FileAudio size={20} /><strong>Transkrypcja</strong><span>TXT, SRT, VTT</span></div><div><Languages size={20} /><strong>Tłumaczenie</strong><span>PL i EN</span></div><div><AudioLines size={20} /><strong>Dubbing</strong><span>WAV i MP4</span></div></aside>
@@ -196,5 +226,6 @@ function SourceIntake({ file, youtubeUrl, setYoutubeUrl, onFile, transcribe, tra
 }
 
 function PrerequisiteState({ hasTranscript, onAction }: { hasTranscript: boolean; onAction: () => void }) {
-  return <section className="panel prerequisite"><AudioLines size={28} /><div><h2>{hasTranscript ? 'Brakuje tłumaczenia' : 'Brakuje materiału źródłowego'}</h2><p>{hasTranscript ? 'Transkrypcja jest gotowa.' : 'Rozpocznij od transkrypcji.'}</p></div><button className="button button-primary" onClick={onAction}>{hasTranscript ? 'Przejdź do tłumaczenia' : 'Dodaj materiał'}<ChevronRight size={16} /></button></section>;
+  const { t } = useLocale();
+  return <section className="panel prerequisite"><AudioLines size={28} /><div><h2>{hasTranscript ? t('translationMissing') : t('sourceMissing')}</h2><p>{hasTranscript ? t('transcriptReady') : t('startTranscription')}</p></div><button className="button button-primary" onClick={onAction}>{hasTranscript ? t('goTranslation') : t('addMaterial')}<ChevronRight size={16} /></button></section>;
 }

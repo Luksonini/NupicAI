@@ -101,7 +101,41 @@ Jesli aplikacja ma byc dostepna z innych komputerow w sieci:
 ./start.sh
 ```
 
-`start.sh` automatycznie laduje lokalny plik `.env`. `WEGORZ_ADMIN_TOKEN` chroni zakladke Administrator. Bez tej zmiennej uslugi uzytkownika nadal dzialaja, ale backend administracyjny pozostaje zablokowany. `WEGORZ_CORS_ORIGINS` powinno zawierac wylacznie adresy frontendu, ktore maja korzystac z API.
+`start.sh` automatycznie laduje lokalny plik `.env`. `WEGORZ_ADMIN_TOKEN` chroni zakladke Administrator. Bez tej zmiennej backend administracyjny pozostaje zablokowany. `WEGORZ_CORS_ORIGINS` powinno zawierac wylacznie adresy frontendu, ktore maja korzystac z API.
+
+## Konta i retencja danych
+
+Publiczna strona startowa prowadzi do rejestracji lub logowania. Konta sa przechowywane w lokalnej bazie `runtime/nupicai.sqlite3` (ignorowanej przez Git). Hasla sa zapisywane jako PBKDF2-SHA256 z osobna losowa sola, a token sesji w bazie wystepuje tylko jako SHA-256. Przegladarka otrzymuje sesje w ciasteczku `HttpOnly` z `SameSite=Lax`.
+
+Kazde zadanie ma wlasciciela. Pliki trafiaja do osobnej przestrzeni:
+
+```text
+/tmp/parakeet_server/users/<user_id>/jobs/<job_id>/
+```
+
+Backend sprawdza wlasciciela rowniez przy bezposrednim pobieraniu audio, wideo, zrodla i strumienia SSE. Zakonczone pliki oraz prompty glosowe sa automatycznie usuwane po czasie ustawionym przez `NUPICAI_DATA_RETENTION_HOURS` (domyslnie 24 h). Uzytkownik moze tez natychmiast usunac wszystkie swoje pliki w zakladce `Moje konto`. Rekord konta pozostaje, dopoki nie zostanie wdrozona osobna procedura zamkniecia konta.
+
+Na serwerze publicznym wymagane jest HTTPS. Za reverse proxy ustaw:
+
+```bash
+NUPICAI_SECURE_COOKIES=1
+```
+
+`NUPICAI_SESSION_DAYS` steruje czasem sesji (domyslnie 30 dni). Czyszczenie uruchamia sie przy starcie i nastepnie raz na godzine; aktywne zadania nie sa usuwane.
+
+## Jezyki i SEO
+
+Publiczna strona ma indeksowalne wersje polska (`/`) i angielska (`/en`) z osobnymi tytulami, opisami, linkami `hreflang`, adresami kanonicznymi i poprawnym atrybutem `lang`. Dla osoby bez zapisanego wyboru interfejs wybiera polski, gdy jezyk przegladarki zaczyna sie od `pl`, a w pozostalych przypadkach angielski. Reczny wybor PL/EN jest zapisywany w przegladarce. Jezyk docelowy tlumaczenia moze byc ustawiony niezaleznie na polski albo angielski.
+
+Przed publicznym buildem ustaw prawdziwy adres wdrozenia, a dopiero potem przebuduj frontend:
+
+```bash
+NEXT_PUBLIC_SITE_URL=https://twoja-domena.example npm run build
+```
+
+FastAPI wystawia dynamiczne `/robots.txt` i `/sitemap.xml`, dlatego uwzglednia faktyczny host wdrozenia. Landing zawiera widoczny opis produktu, semantyczne naglowki, WebApplication JSON-LD oraz opisowe teksty alternatywne. Strona FAQ pozostaje zwykla trescia HTML; nie udaje danych strukturalnych FAQ przeznaczonych dla serwisow medycznych lub rzadowych.
+
+Audio dla ASR i TTS jest przetwarzane lokalnie. Przy zdalnym trybie tlumaczenia tekst segmentow jest wysylany do endpointu skonfigurowanego w panelu administratora. Ta informacja musi pozostac w polityce prywatnosci wdrozenia.
 
 ## Widoki uzytkownika i administratora
 

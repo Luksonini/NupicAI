@@ -1,6 +1,49 @@
-import type { AdminSettings, JobEvent, Speaker, DubParams, TTSModelProfile } from './types';
+import type { AdminSettings, JobEvent, Speaker, DubParams, TTSModelProfile, User } from './types';
 
 const BASE = '';
+
+async function apiError(res: Response): Promise<Error> {
+  const body = await res.json().catch(() => ({ detail: res.statusText }));
+  return new Error(String(body.detail ?? res.statusText));
+}
+
+export async function currentUser(): Promise<User | null> {
+  const res = await fetch(`${BASE}/auth/me`, { credentials: 'same-origin' });
+  if (res.status === 401) return null;
+  if (!res.ok) throw await apiError(res);
+  return (await res.json() as { user: User }).user;
+}
+
+export async function registerAccount(params: {
+  email: string; display_name: string; password: string; terms_accepted: boolean;
+}): Promise<User> {
+  const res = await fetch(`${BASE}/auth/register`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await apiError(res);
+  return (await res.json() as { user: User }).user;
+}
+
+export async function loginAccount(email: string, password: string): Promise<User> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) throw await apiError(res);
+  return (await res.json() as { user: User }).user;
+}
+
+export async function logoutAccount(): Promise<void> {
+  const res = await fetch(`${BASE}/auth/logout`, { method: 'POST', credentials: 'same-origin' });
+  if (!res.ok) throw await apiError(res);
+}
+
+export async function deleteMyFiles(): Promise<{ removed_bytes: number }> {
+  const res = await fetch(`${BASE}/account/files`, { method: 'DELETE', credentials: 'same-origin' });
+  if (!res.ok) throw await apiError(res);
+  return await res.json() as { removed_bytes: number };
+}
 
 export async function uploadAndTranscribe(file: File): Promise<string> {
   const form = new FormData();
