@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw
 from pynput import keyboard
 import pystray
 
-from .api import NupicFlowApi
+from .api import NupicFlowApi, NupicFlowHttpError
 from .audio import MicrophoneRecorder
 from .hotkey import PushToTalkHotkey
 
@@ -39,6 +39,7 @@ class FlowApp:
         self.server_var = tk.StringVar(value=self.api.base_url)
         self.email_var = tk.StringVar(value=str(self.config.get("email") or ""))
         self.password_var = tk.StringVar()
+        self.account_var = tk.StringVar()
         self.polish_var = tk.BooleanVar(value=bool(self.config.get("polish", False)))
         self.auto_paste_var = tk.BooleanVar(value=bool(self.config.get("auto_paste", True)))
         self.polish_enabled = bool(self.polish_var.get())
@@ -58,14 +59,19 @@ class FlowApp:
         ttk.Label(frame, text="NupicAI Flow", font=("Sans", 22, "bold")).pack(anchor="w")
         ttk.Label(frame, text="Przytrzymaj Ctrl+Alt+Space, mów i puść, aby wkleić tekst.", wraplength=390).pack(anchor="w", pady=(3, 18))
 
-        form = ttk.Frame(frame)
-        form.pack(fill="x")
-        self._field(form, "Serwer", self.server_var)
-        self._field(form, "E-mail", self.email_var)
-        self._field(form, "Hasło", self.password_var, show="•")
-        ttk.Button(form, text="Zaloguj", command=self.login).pack(fill="x", pady=(10, 14))
+        self.login_form = ttk.Frame(frame)
+        self.login_form.pack(fill="x")
+        self._field(self.login_form, "Serwer", self.server_var)
+        self._field(self.login_form, "E-mail", self.email_var)
+        self._field(self.login_form, "Hasło", self.password_var, show="•")
+        ttk.Button(self.login_form, text="Zaloguj", command=self.login).pack(fill="x", pady=(10, 14))
 
-        ttk.Separator(frame).pack(fill="x", pady=4)
+        self.account_frame = ttk.Frame(frame)
+        ttk.Label(self.account_frame, textvariable=self.account_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(self.account_frame, text="Wyloguj", command=self.logout).pack(side="right")
+
+        self.login_separator = ttk.Separator(frame)
+        self.login_separator.pack(fill="x", pady=4)
         ttk.Checkbutton(frame, text="Poprawiaj tekst przez AI (wolniej)", variable=self.polish_var, command=self._settings_changed).pack(anchor="w", pady=(12, 4))
         ttk.Checkbutton(frame, text="Automatycznie wklejaj do aktywnego okna", variable=self.auto_paste_var, command=self.save_config).pack(anchor="w")
         self.record_button = ttk.Button(frame, text="Nagraj test", command=self.toggle_recording)
@@ -107,7 +113,7 @@ class FlowApp:
                 })
                 self.root.after(0, lambda: self.password_var.set(""))
                 self.root.after(0, self.save_config)
-                self.root.after(0, lambda: self._set_status(f"Gotowy: {user.get('display_name') or user.get('email')}", 0))
+                self.root.after(0, lambda: self._show_authenticated(user))
             except Exception as exc:
                 self.root.after(0, lambda message=str(exc): self._show_error(message))
             finally:
@@ -203,11 +209,48 @@ class FlowApp:
         def worker() -> None:
             try:
                 user = self.api.current_user()
-                self.root.after(0, lambda: self._set_status(f"Gotowy: {user.get('display_name') or user.get('email')}", 0))
+                self.root.after(0, lambda: self._show_authenticated(user))
+            except NupicFlowHttpError as exc:
+                if exc.status_code in {401, 403}:
+                    self.config.pop("session_token", None)
+                    self.root.after(0, self.save_config)
+                    self.root.after(0, lambda: self._set_status("Sesja wygasła. Zaloguj się ponownie.", 0))
+                else:
+                    self.root.after(0, lambda message=str(exc): self._set_status(f"Serwer niedostępny: {message}", 0))
+            except Exception as exc:
+                # Keep the session across backend restarts and temporary network failures.
+                self.root.after(0, lambda message=str(exc): self._set_status(f"Serwer niedostępny: {message}", 0))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_authenticated(self, user: dict[str, object]) -> None:
+        identity = str(user.get("display_name") or user.get("email") or self.email_var.get())
+        self.account_var.set(f"Zalogowano jako {identity}")
+        self.login_form.pack_forget()
+        self.account_frame.pack(fill="x", pady=(12, 14), before=self.login_separator)
+        self._set_status(f"Gotowy: {identity}", 0)
+
+    def logout(self) -> None:
+        if self.busy:
+            return
+        self.busy = True
+
+        def worker() -> None:
+            try:
+                self.api.logout()
             except Exception:
+                pass
+            finally:
                 self.config.pop("session_token", None)
                 self.root.after(0, self.save_config)
+                self.root.after(0, self._show_logged_out)
+                self.busy = False
+
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_logged_out(self) -> None:
+        self.account_frame.pack_forget()
+        self.login_form.pack(fill="x", before=self.login_separator)
+        self._set_status("Wylogowano", 0)
 
     def _set_status(self, message: str, progress: float) -> None:
         self.status_var.set(message)

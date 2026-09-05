@@ -33,8 +33,9 @@ pasted.
 
 Configuration is stored with mode `0600` in
 `~/.config/nupicai-flow/config.json`. The prototype stores an opaque NupicAI session token,
-never the account password. A production package should move that token to Secret Service
-(Linux) or Windows Credential Manager.
+never the account password. Temporary server or network failures do not remove the saved
+session; only an explicit authentication rejection does. A production package should move
+that token to Secret Service (Linux) or Windows Credential Manager.
 
 ## Packaging roadmap
 

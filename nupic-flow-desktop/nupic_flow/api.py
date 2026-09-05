@@ -6,6 +6,12 @@ from typing import Any, Callable
 import requests
 
 
+class NupicFlowHttpError(RuntimeError):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class NupicFlowApi:
     def __init__(self, base_url: str, timeout: float = 120.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -32,6 +38,13 @@ class NupicFlowApi:
         response = self.session.get(f"{self.base_url}/auth/me", timeout=15)
         self._raise(response)
         return dict(response.json()["user"])
+
+    def logout(self) -> None:
+        try:
+            response = self.session.post(f"{self.base_url}/auth/logout", timeout=15)
+            self._raise(response)
+        finally:
+            self.session.cookies.clear()
 
     def transcribe(
         self,
@@ -93,4 +106,5 @@ class NupicFlowApi:
             message = response.text.strip() or response.reason
         retry_after = response.headers.get("Retry-After", "")
         retry_note = f" Spróbuj ponownie za około {retry_after} s." if retry_after else ""
-        raise RuntimeError(f"NupicAI HTTP {response.status_code}: {message}{retry_note}")
+        full_message = f"NupicAI HTTP {response.status_code}: {message}{retry_note}"
+        raise NupicFlowHttpError(response.status_code, full_message)
