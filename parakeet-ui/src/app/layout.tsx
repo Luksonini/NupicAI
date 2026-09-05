@@ -34,6 +34,19 @@ const structuredData = {
   operatingSystem: 'Web',
   inLanguage: ['pl', 'en'],
   description: 'Studio AI do transkrypcji, tłumaczenia i dubbingu audio oraz wideo.',
+  creator: {
+    '@type': 'Organization',
+    name: 'Tomasz Gasior IT',
+    address: {
+      '@type': 'PostalAddress',
+      streetAddress: 'ul. Spokojna 2',
+      postalCode: '20-074',
+      addressLocality: 'Lublin',
+      addressCountry: 'PL',
+    },
+    email: 'gasior1510@gmail.com',
+    vatID: 'PL9182117616',
+  },
   featureList: [
     'Time-aligned transcription in 25 European languages',
     'Translation from supported languages into Polish or English',

@@ -1,0 +1,25 @@
+[Unit]
+Description=NupicAI Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nupicai
+Group=nupicai
+WorkingDirectory=/srv/nupicai
+EnvironmentFile=/srv/nupicai/.env
+ExecStartPre=/srv/nupicai/.venv/bin/python /srv/nupicai/check_production.py --strict
+ExecStart=/srv/nupicai/.venv/bin/python /srv/nupicai/server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/nupicai/runtime
+
+[Install]
+WantedBy=multi-user.target

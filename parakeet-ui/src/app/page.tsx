@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AudioLines, ChevronRight, FileAudio, Languages, Menu, Mic2,
-  PanelLeftClose, Plus, ShieldCheck, Upload, UserRound, Youtube,
+  Activity, AudioLines, ChevronRight, Clock3, FileAudio, Languages, Menu, Mic2,
+  House, PanelLeftClose, Plus, ShieldCheck, Upload, UserRound, Youtube,
 } from 'lucide-react';
-import type { TranscribeResult, TranslateResult, Step, User } from '@/lib/types';
-import { uploadAndTranscribe, transcribeYoutube, sourceUrl, streamJob, checkHealth, currentUser } from '@/lib/api';
+import type { TranscribeResult, TranslateResult, Step, Usage, User } from '@/lib/types';
+import { accountUsage, uploadAndTranscribe, transcribeYoutube, sourceUrl, streamJob, checkHealth, currentUser } from '@/lib/api';
 import DropZone from '@/components/DropZone';
 import JobProgress from '@/components/JobProgress';
 import TranscriptPanel from '@/components/TranscriptPanel';
@@ -48,20 +48,28 @@ export function NupicAIApp({ initialLocale }: { initialLocale: Locale }) {
 
 function AuthenticatedApp() {
   const [user, setUser] = useState<User | null>(null);
+  const [ready, setReady] = useState(false);
+  const [showLanding, setShowLanding] = useState(false);
 
   useEffect(() => {
-    currentUser().then(setUser).catch(() => setUser(null));
+    currentUser().then(setUser).catch(() => setUser(null)).finally(() => setReady(true));
   }, []);
 
-  if (!user) return <LandingPage onAuthenticated={setUser} />;
-  return <Studio user={user} onLogout={() => setUser(null)} />;
+  if (!ready) return <div className="app-loading"><img src="/brand/mark.png" alt="" /><span>Wczytuję NupicAI…</span></div>;
+  if (!user || showLanding) return <LandingPage
+    onAuthenticated={next => { setUser(next); setShowLanding(false); }}
+    authenticatedUser={user}
+    onOpenStudio={() => setShowLanding(false)}
+  />;
+  return <Studio user={user} onLogout={() => setUser(null)} onHome={() => setShowLanding(true)} />;
 }
 
-function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
+function Studio({ user, onLogout, onHome }: { user: User; onLogout: () => void; onHome: () => void }) {
   const { locale, t } = useLocale();
   const [service, setService] = useState<Service>('transcribe');
   const [railOpen, setRailOpen] = useState(true);
   const [health, setHealth] = useState<boolean | null>(null);
+  const [usage, setUsage] = useState<Usage>(user.usage);
   const [file, setFile] = useState<File | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [sourceKind, setSourceKind] = useState<'upload' | 'youtube'>('upload');
@@ -78,6 +86,22 @@ function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     const refresh = () => checkHealth().then(setHealth);
     refresh(); const id = window.setInterval(refresh, 30000); return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const openAccount = () => setService('account');
+    window.addEventListener('nupicai-open-account', openAccount);
+    return () => window.removeEventListener('nupicai-open-account', openAccount);
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => accountUsage().then(setUsage).catch(() => undefined);
+    window.addEventListener('nupicai-usage-changed', refresh);
+    const id = window.setInterval(refresh, 60000);
+    return () => {
+      window.removeEventListener('nupicai-usage-changed', refresh);
+      window.clearInterval(id);
+    };
   }, []);
 
   const resetProject = useCallback(() => {
@@ -125,6 +149,7 @@ function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
   const isVideo = sourceKind === 'youtube' || !!file && (file.type.startsWith('video/') || /\.(mp4|mkv|webm|avi|mov)$/i.test(file.name));
   const projectName = useMemo(() => file?.name || (youtubeUrl ? (locale === 'pl' ? 'Materiał YouTube' : 'YouTube media') : t('newProject')), [file, youtubeUrl, locale, t]);
   const meta = SERVICE_META[service];
+  const visibleServices = useMemo(() => SERVICES.filter(item => item.id !== 'admin' || user.is_admin), [user.is_admin]);
 
   const intake = <SourceIntake
     file={file} youtubeUrl={youtubeUrl} setYoutubeUrl={setYoutubeUrl} onFile={handleFile}
@@ -134,11 +159,11 @@ function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   return <div className={`app-shell ${railOpen ? '' : 'rail-collapsed'}`}>
     <aside className="app-rail">
-      <BrandMark />
+      <button className="brand-home" onClick={onHome} title={locale === 'pl' ? 'Strona główna' : 'Home'}><BrandMark /></button>
       <button className="button button-primary new-project" onClick={resetProject}><Plus size={16} /><span>{t('newProject')}</span></button>
       <nav className="service-nav" aria-label={t('services')}>
         <span className="nav-label">{t('services')}</span>
-        {SERVICES.map(item => <button key={item.id} className={service === item.id ? 'active' : ''} onClick={() => setService(item.id)} title={t(item.id)}>
+        {visibleServices.map(item => <button key={item.id} className={service === item.id ? 'active' : ''} onClick={() => setService(item.id)} title={t(item.id)}>
           <item.icon size={18} /><span>{t(item.id)}</span>
           {item.id === 'transcribe' && transcribeResult && <i />}
           {item.id === 'translate' && translateResult && <i />}
@@ -154,8 +179,12 @@ function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
     <div className="app-body">
       <header className="topbar">
         <button className="icon-button rail-toggle" title={t('navigation')} onClick={() => setRailOpen(v => !v)}>{railOpen ? <PanelLeftClose size={18} /> : <Menu size={18} />}</button>
+        <button className="icon-button home-button" title={locale === 'pl' ? 'Wróć do strony NupicAI' : 'Return to NupicAI home'} onClick={onHome}><House size={18} /></button>
         <div className="page-title"><h1>{t(service)}</h1><p>{locale === 'pl' ? meta.caption : ({ transcribe: 'Source media and subtitles', translate: 'Source text and target version', dub: 'Voices, segments and final mix', voice: 'Speech synthesis from text', account: 'Profile, session and data privacy', admin: 'Models, integrations and diagnostics' } as Record<Service, string>)[service]}</p></div>
         <LanguageSwitch compact />
+        <button className="usage-badge" onClick={() => setService('account')} title={locale === 'pl' ? 'Pozostały limit audio' : 'Remaining audio allowance'}>
+          <Clock3 size={14} /><span>{usage.unlimited ? (locale === 'pl' ? 'Bez limitu' : 'Unlimited') : `${formatUsageMinutes(usage.available_seconds)} ${locale === 'pl' ? 'pozostało' : 'left'}`}</span>
+        </button>
         <div className={`server-status ${health === null ? 'checking' : health ? 'online' : 'offline'}`}><Activity size={14} /><span>{health === null ? t('checking') : health ? t('systemReady') : t('systemOffline')}</span></div>
       </header>
 
@@ -168,21 +197,27 @@ function Studio({ user, onLogout }: { user: User; onLogout: () => void }) {
           <section className="panel transcript-surface"><TranscriptPanel result={transcribeResult} audioSrc={audioSrc} /></section>
         </>)}
 
-        {service === 'translate' && (!transcribeResult ? intake : <div className="translation-layout">
+        {service === 'translate' && (transcribeResult ? <div className="translation-layout">
           <section className="panel source-reference"><TranscriptPanel result={transcribeResult} audioSrc={audioSrc} /></section>
           <section className="panel translation-surface"><TranslatePanel segments={transcribeResult.segments} sourceLang={transcribeResult.detected_language}
             onDone={result => { setTranslateResult(result); setStep('translated'); }} onContinue={() => setService('dub')} /></section>
-        </div>)}
+        </div> : <section className="panel translation-surface pasted-translation"><TranslatePanel segments={[]} sourceLang="en"
+          onDone={result => { setTranslateResult(result); setStep('translated'); }} /></section>)}
 
-        {service === 'dub' && (!translateResult ? <PrerequisiteState hasTranscript={!!transcribeResult} onAction={() => setService(transcribeResult ? 'translate' : 'transcribe')} /> :
+        {service === 'dub' && (!translateResult || !transcribeResult ? <PrerequisiteState hasTranscript={!!transcribeResult} onAction={() => setService(transcribeResult ? 'translate' : 'transcribe')} /> :
           <TTSPanel segments={translateResult.segments} targetLang={translateResult.target_lang} transcribeJobId={transcribeJobId} originalSrc={audioSrc} hasVideo={isVideo} />)}
 
         {service === 'voice' && <TextTTSPanel />}
-        {service === 'account' && <AccountPanel user={user} onLogout={onLogout} />}
-        {service === 'admin' && <AdminPanel />}
+        {service === 'account' && <AccountPanel user={{ ...user, usage }} onLogout={onLogout} />}
+        {service === 'admin' && user.is_admin && <AdminPanel />}
       </main>
     </div>
   </div>;
+}
+
+function formatUsageMinutes(seconds: number): string {
+  const minutes = Math.max(0, seconds) / 60;
+  return minutes < 10 ? `${minutes.toFixed(1)} min` : `${Math.floor(minutes)} min`;
 }
 
 function BrandMark() {

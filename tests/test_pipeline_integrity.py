@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 import json
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -10,10 +11,102 @@ import numpy as np
 import soundfile as sf
 
 import server
-from auth_store import AuthStore, User
+from auth_store import AuthStore, QuotaExceeded, User
 
 
 class PipelineIntegrityTests(unittest.TestCase):
+    def test_maskgit_continuity_profile_is_packaged_and_scoped(self) -> None:
+        profile, checkpoint = server._resolve_tts_profile("maskgit_continuity")
+        self.assertEqual(profile, "maskgit_continuity")
+        self.assertTrue(checkpoint.is_file())
+        self.assertTrue(server._tts_continuity_enabled(profile))
+        self.assertFalse(server._tts_continuity_enabled("mini_dualpath"))
+        self.assertFalse(server._tts_continuity_enabled("styleenc128_lstm"))
+
+    def test_configured_admin_account_is_visible_and_has_unlimited_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(
+                Path(tmp) / "accounts.sqlite3",
+                free_seconds=1,
+                admin_emails=("admin@example.com",),
+            )
+            user = store.register("admin@example.com", "Admin User", "bezpieczne-haslo-123")
+            self.assertTrue(user.is_admin)
+            self.assertTrue(user.unlimited_usage)
+            store.reserve_usage(user.id, "unlimited-job", "tts_text", 86_400)
+            usage = store.usage(user.id)
+            self.assertTrue(usage["unlimited"])
+            self.assertEqual(usage["reserved_seconds"], 0)
+
+    def test_existing_account_is_promoted_during_admin_schema_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "accounts.sqlite3"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """CREATE TABLE users (
+                        id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                        display_name TEXT NOT NULL, password_hash TEXT NOT NULL,
+                        created_at REAL NOT NULL, credit_seconds INTEGER NOT NULL DEFAULT 0,
+                        used_seconds INTEGER NOT NULL DEFAULT 0
+                    )"""
+                )
+                conn.execute(
+                    "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("legacy", "admin@example.com", "Legacy Admin", "unused", 1.0, 1, 0),
+                )
+            store = AuthStore(db_path, admin_emails=("ADMIN@example.com",))
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT is_admin, unlimited_usage FROM users WHERE id = 'legacy'"
+                ).fetchone()
+            self.assertEqual((row["is_admin"], row["unlimited_usage"]), (1, 1))
+
+    def test_usage_reservations_block_overbooking_and_settle_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3", free_seconds=300)
+            user = store.register("quota@example.com", "Quota User", "bezpieczne-haslo-123")
+            store.reserve_usage(user.id, "job-a", "dub", 200)
+            usage = store.usage(user.id)
+            self.assertEqual(usage["available_seconds"], 100)
+            self.assertEqual(usage["reserved_seconds"], 200)
+            with self.assertRaises(QuotaExceeded):
+                store.reserve_usage(user.id, "job-b", "tts_text", 101)
+
+            settled = store.settle_usage("job-a", 125.2)
+            self.assertIsNotNone(settled)
+            self.assertEqual(settled["used_seconds"], 126)
+            self.assertEqual(settled["available_seconds"], 174)
+            self.assertEqual(store.settle_usage("job-a", 190)["used_seconds"], 126)
+
+    def test_failed_usage_reservation_is_released(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3", free_seconds=60)
+            user = store.register("release@example.com", "Release User", "bezpieczne-haslo-123")
+            store.reserve_usage(user.id, "job-a", "tts_text", 50)
+            released = store.release_usage("job-a")
+            self.assertIsNotNone(released)
+            self.assertEqual(released["available_seconds"], 60)
+            self.assertEqual(released["reserved_seconds"], 0)
+
+    def test_restart_releases_orphaned_usage_reservations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3", free_seconds=60)
+            user = store.register("restart@example.com", "Restart User", "bezpieczne-haslo-123")
+            store.reserve_usage(user.id, "job-a", "dub", 50)
+            self.assertEqual(store.release_orphaned_reservations(), 1)
+            self.assertEqual(store.usage(user.id)["available_seconds"], 60)
+
+    def test_settlement_can_exceed_its_estimate_without_spending_other_reservations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3", free_seconds=300)
+            user = store.register("concurrent@example.com", "Concurrent User", "bezpieczne-haslo-123")
+            store.reserve_usage(user.id, "job-a", "tts_text", 100)
+            store.reserve_usage(user.id, "job-b", "dub", 150)
+            usage = store.settle_usage("job-a", 130)
+            self.assertEqual(usage["used_seconds"], 130)
+            self.assertEqual(usage["reserved_seconds"], 150)
+            self.assertEqual(usage["available_seconds"], 20)
+
     def test_account_passwords_and_sessions_are_not_stored_in_plaintext(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "accounts.sqlite3"
@@ -29,6 +122,106 @@ class PipelineIntegrityTests(unittest.TestCase):
             self.assertNotIn(b"bezpieczne-haslo-123", raw_db)
             self.assertNotIn(token.encode("utf-8"), raw_db)
             store.delete_session(token)
+            self.assertIsNone(store.user_for_session(token))
+
+    def test_password_reset_is_one_time_and_revokes_existing_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "accounts.sqlite3"
+            store = AuthStore(db_path)
+            user = store.register("reset@example.com", "Reset User", "stare-bezpieczne-haslo")
+            session, _ = store.create_session(user.id)
+            token = store.create_password_reset(user.email, ttl_seconds=600)
+            self.assertIsNotNone(token)
+            self.assertNotIn(str(token).encode("utf-8"), db_path.read_bytes())
+            self.assertTrue(store.reset_password(str(token), "nowe-bezpieczne-haslo"))
+            self.assertFalse(store.reset_password(str(token), "kolejne-bezpieczne-haslo"))
+            self.assertIsNone(store.user_for_session(session))
+            self.assertIsNone(store.authenticate(user.email, "stare-bezpieczne-haslo"))
+            self.assertEqual(store.authenticate(user.email, "nowe-bezpieczne-haslo"), user)
+
+    def test_password_reset_does_not_disclose_unknown_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3")
+            self.assertIsNone(store.create_password_reset("missing@example.com"))
+
+    def test_youtube_errors_are_classified_for_actionable_feedback(self) -> None:
+        message, retryable = server._yt_dlp_error_message("HTTP Error 403: Forbidden")
+        self.assertTrue(retryable)
+        self.assertIn("403", message)
+        message, retryable = server._yt_dlp_error_message("This is a private video")
+        self.assertFalse(retryable)
+        self.assertIn("prywatny", message)
+
+    def test_dub_segment_cache_key_tracks_voice_text_and_regeneration_nonce(self) -> None:
+        req = server.DubRequest(
+            segments=[], speaker_label="voice-a", target_lang="pl", tts_model_profile="model-a"
+        )
+        segment = {
+            "translation": "Przykładowe zdanie.", "speaker_label": "voice-b",
+            "seed": 1234, "render_nonce": 0,
+        }
+        base = server._dub_segment_render_key(segment, req, target_budget=2.0, position=0)
+        same = server._dub_segment_render_key(dict(segment), req, target_budget=2.0, position=0)
+        changed_nonce = server._dub_segment_render_key(
+            {**segment, "render_nonce": 1}, req, target_budget=2.0, position=0
+        )
+        changed_voice = server._dub_segment_render_key(
+            {**segment, "speaker_label": "voice-c"}, req, target_budget=2.0, position=0
+        )
+        self.assertEqual(base, same)
+        self.assertNotEqual(base, changed_nonce)
+        self.assertNotEqual(base, changed_voice)
+
+    def test_dub_rerender_reserves_only_changed_segment_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "segment.wav"
+            audio_path.write_bytes(b"cached")
+            segment = {
+                "segment_id": "scene-a", "start": 0.0, "end": 2.0,
+                "translation": "Przykładowe zdanie.", "seed": 1234, "render_nonce": 0,
+            }
+            req = server.DubRequest(
+                segments=[segment], speaker_label="voice-a", target_lang="pl",
+                tts_model_profile="model-a", reuse_dub_job_id="prior-dub",
+            )
+            render_key = server._dub_segment_render_key(segment, req, target_budget=2.0, position=0)
+            prior = server.Job("prior-dub", "dub", owner_id="owner", status="done")
+            prior.result = {"segments": [{
+                "segment_id": "scene-a", "target_budget": 2.0,
+                "render_key": render_key, "segment_audio_path": str(audio_path),
+            }]}
+            server._jobs[prior.id] = prior
+            try:
+                self.assertEqual(server._estimate_dub_generation_seconds(req, 2.0), 1.0)
+                req.segments[0]["render_nonce"] = 1
+                self.assertEqual(server._estimate_dub_generation_seconds(req, 2.0), 3.0)
+            finally:
+                server._jobs.pop(prior.id, None)
+
+    def test_registration_records_accepted_legal_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3")
+            user = store.register(
+                "legal@example.com", "Legal User", "bezpieczne-haslo-123",
+                terms_version="2026-08-29", privacy_version="2026-08-29",
+            )
+            with store._connect() as conn:
+                row = conn.execute(
+                    "SELECT terms_version, privacy_version, terms_accepted_at FROM users WHERE id = ?",
+                    (user.id,),
+                ).fetchone()
+            self.assertEqual(row["terms_version"], "2026-08-29")
+            self.assertEqual(row["privacy_version"], "2026-08-29")
+            self.assertGreater(float(row["terms_accepted_at"]), 0.0)
+
+    def test_account_deletion_requires_password_and_cascades_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AuthStore(Path(tmp) / "accounts.sqlite3")
+            user = store.register("delete@example.com", "Delete User", "bezpieczne-haslo-123")
+            token, _ = store.create_session(user.id)
+            self.assertFalse(store.delete_user(user.id, "zle-haslo"))
+            self.assertIsNotNone(store.user_for_session(token))
+            self.assertTrue(store.delete_user(user.id, "bezpieczne-haslo-123"))
             self.assertIsNone(store.user_for_session(token))
 
     def test_job_owner_cannot_read_another_users_job(self) -> None:

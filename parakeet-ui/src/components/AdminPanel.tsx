@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  Activity, AlertTriangle, CheckCircle2, Cpu, KeyRound, RefreshCw,
+  Activity, AlertTriangle, CheckCircle2, Cpu, KeyRound, LoaderCircle, RefreshCw,
   Save, Server, ShieldCheck,
 } from 'lucide-react';
 import type { AdminSettings } from '@/lib/types';
@@ -15,10 +15,13 @@ const EMPTY_FORM = {
   translation_batch_segments: 8,
   translation_api_key: '',
   clear_translation_api_key: false,
+  tts_profile: '',
+  mel_steps_first: 8,
+  mel_steps_second: 3,
+  mel_twopass_t_noise: 0.12,
 };
 
 export default function AdminPanel() {
-  const [token, setToken] = useState('');
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
@@ -26,11 +29,7 @@ export default function AdminPanel() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    const stored = sessionStorage.getItem('wegorz_admin_token') ?? '';
-    if (stored) {
-      setToken(stored);
-      void load(stored);
-    }
+    void load();
   }, []);
 
   const applySettings = (data: AdminSettings) => {
@@ -42,14 +41,17 @@ export default function AdminPanel() {
       translation_batch_segments: data.translation_batch_segments,
       translation_api_key: '',
       clear_translation_api_key: false,
+      tts_profile: data.tts_profile,
+      mel_steps_first: data.mel_steps_first,
+      mel_steps_second: data.mel_steps_second,
+      mel_twopass_t_noise: data.mel_twopass_t_noise,
     });
   };
 
-  const load = async (accessToken = token) => {
+  const load = async () => {
     setBusy(true); setError(''); setSaved(false);
     try {
-      const data = await getAdminSettings(accessToken);
-      sessionStorage.setItem('wegorz_admin_token', accessToken);
+      const data = await getAdminSettings();
       applySettings(data);
     } catch (e: unknown) {
       setSettings(null);
@@ -62,7 +64,7 @@ export default function AdminPanel() {
   const save = async () => {
     setBusy(true); setError(''); setSaved(false);
     try {
-      const data = await saveAdminSettings(token, form);
+      const data = await saveAdminSettings(form);
       applySettings(data);
       setSaved(true);
     } catch (e: unknown) {
@@ -77,18 +79,11 @@ export default function AdminPanel() {
       <section className="admin-login panel max-w-md">
         <div className="panel-heading">
           <span className="icon-box"><ShieldCheck size={18} /></span>
-          <div><h2>Administrator</h2><p>Dostęp chroniony</p></div>
-        </div>
-        <label className="field-label" htmlFor="admin-token">Token administratora</label>
-        <div className="field-with-icon">
-          <KeyRound size={16} />
-          <input id="admin-token" type="password" value={token}
-            onChange={e => setToken(e.target.value)} onKeyDown={e => e.key === 'Enter' && void load()} />
+          <div><h2>Administrator</h2><p>Uprawnienia przypisane do konta</p></div>
         </div>
         {error && <div className="notice notice-error"><AlertTriangle size={16} />{error}</div>}
-        <button className="button button-primary w-full" disabled={!token || busy} onClick={() => void load()}>
-          <ShieldCheck size={16} /> {busy ? 'Sprawdzam…' : 'Otwórz panel'}
-        </button>
+        {busy && <div className="admin-loading"><LoaderCircle className="spin" size={18} />Wczytuję konfigurację…</div>}
+        {!busy && error && <button className="button button-secondary w-full" onClick={() => void load()}><RefreshCw size={16} />Spróbuj ponownie</button>}
       </section>
     );
   }
@@ -147,6 +142,36 @@ export default function AdminPanel() {
         </button>
       </section>
 
+      <section className="panel admin-settings">
+        <div className="panel-heading">
+          <span className="icon-box"><Cpu size={18} /></span>
+          <div><h2>Synteza mowy</h2><p>Domyślny model i parametry flow</p></div>
+        </div>
+        <div className="form-grid">
+          <label className="form-span-2"><span className="field-label">Domyślny model TTS</span>
+            <select value={form.tts_profile}
+              onChange={e => setForm(v => ({ ...v, tts_profile: e.target.value }))}>
+              {settings.tts_models.map(model => <option key={model.key} value={model.key}>{model.label}</option>)}
+            </select>
+          </label>
+          <label><span className="field-label">Kroki first pass</span>
+            <input type="number" min={1} max={32} value={form.mel_steps_first}
+              onChange={e => setForm(v => ({ ...v, mel_steps_first: Number(e.target.value) }))} />
+          </label>
+          <label><span className="field-label">Kroki second pass</span>
+            <input type="number" min={0} max={16} value={form.mel_steps_second}
+              onChange={e => setForm(v => ({ ...v, mel_steps_second: Number(e.target.value) }))} />
+          </label>
+          <label className="form-span-2"><span className="field-label">Noise drugiego przejścia</span>
+            <input type="number" min={0} max={1} step={0.01} value={form.mel_twopass_t_noise}
+              onChange={e => setForm(v => ({ ...v, mel_twopass_t_noise: Number(e.target.value) }))} />
+          </label>
+        </div>
+        <button className="button button-primary" disabled={busy || !form.tts_profile} onClick={() => void save()}>
+          <Save size={16} /> {busy ? 'Zapisuję…' : 'Zapisz ustawienia TTS'}
+        </button>
+      </section>
+
       <aside className="space-y-4">
         <section className="panel">
           <div className="panel-heading"><span className="icon-box"><Server size={18} /></span><div><h2>System</h2><p>Stan usług</p></div></div>
@@ -155,7 +180,8 @@ export default function AdminPanel() {
             <StatusRow label="TTS" ok={settings.tts_ready} icon={<Cpu size={15} />} />
             <StatusRow label="API tłumaczeń" ok={settings.translation_api_key_configured} icon={<KeyRound size={15} />} />
           </div>
-          <div className="meta-row"><span>Profil TTS</span><strong>{settings.tts_profile}</strong></div>
+          <div className="meta-row"><span>Domyślny profil TTS</span><strong>{settings.tts_profile}</strong></div>
+          <div className="meta-row"><span>Aktywny daemon</span><strong>{settings.tts_active_profile}</strong></div>
           <div className="meta-row"><span>Modele w pamięci</span><strong>{settings.tts_loaded_profiles.length}</strong></div>
           <div className="meta-row"><span>Konta użytkowników</span><strong>{settings.registered_users}</strong></div>
           <div className="meta-row"><span>Aktywne sesje</span><strong>{settings.active_sessions}</strong></div>

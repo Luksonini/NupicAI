@@ -1,0 +1,27 @@
+{
+  "id": "northanger-abbey-chapter-11",
+  "sourceAudio": "/examples/northanger-abbey-source-en.mp3",
+  "dubbedAudio": "/examples/northanger-abbey-dubbed-pl.mp3",
+  "sourceLanguage": "en",
+  "targetLanguage": "pl",
+  "durationSeconds": 21.600167,
+  "sourceText": "She applied to Mr. Allen for confirmation of her hopes, but Mr. Allen, not having his own skies and barometer about him, declined giving any absolute promise of sunshine. She applied to Mrs. Allen, and Mrs. Allen's opinion was more positive. She had no doubt in the world of its being a very fine day, if the clouds would only go off, and the sun keep out.",
+  "translatedText": "Zwróciła się do pana Allena, by potwierdził jej nadzieje, lecz pan Allen, nie mając przy sobie własnego nieba ani barometru, odmówił złożenia jakiejkolwiek stanowczej obietnicy słońca. Zwróciła się więc do pani Allen, której opinia była bardziej zdecydowana. Nie miała najmniejszych wątpliwości, że dzień będzie bardzo piękny, o ile tylko chmury się rozejdą, a słońce pozostanie na niebie.",
+  "dubbedAudioMetadata": {
+    "voiceGender": "female",
+    "sourceRender": "tts_1d90eb8d838b4c6791fdfdcb372b04b1.wav",
+    "durationSeconds": 21.930667,
+    "contentCheck": "Local Parakeet ASR retained all three sentences and the final phrase."
+  },
+  "attribution": {
+    "corpus": "LibriTTS-R",
+    "corpusUrl": "https://www.openslr.org/141/",
+    "work": "Northanger Abbey, chapter 11",
+    "author": "Jane Austen",
+    "reader": "Kristin LeMoine",
+    "license": "CC BY 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "sourceId": "train-clean-360/14/208/14_208_000001_000002.wav",
+    "modification": "Converted from 24 kHz mono WAV to 96 kb/s mono MP3 for web playback."
+  }
+}

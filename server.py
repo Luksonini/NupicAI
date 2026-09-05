@@ -10,10 +10,11 @@ Then open http://localhost:8765
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import html
 import json
 import os
 import re
-import secrets
 import shutil
 import subprocess
 import sys
@@ -21,15 +22,18 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncGenerator
+from urllib.parse import urlparse
+from urllib.request import Request as UrlRequest, urlopen
 
 import numpy as np
 import soundfile as sf
 
-from auth_store import AuthStore, User
+from auth_store import AuthStore, QuotaExceeded, User
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 HERE = Path(__file__).resolve().parent
@@ -64,13 +68,40 @@ TRANSLATE_LOCAL = HERE / "translate"
 MODELS_LOCAL   = HERE / "models"
 YTDLP_DENO     = HERE / "tools/deno/deno"
 LEGACY_GRADIO_CONFIG = HERE / "parakeet_config.json"
-ADMIN_CONFIG_PATH = HERE / "admin_config.json"
-ADMIN_TOKEN = os.environ.get("WEGORZ_ADMIN_TOKEN", "").strip()
+RUNTIME_DIR = HERE / "runtime"
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+_legacy_admin_config = HERE / "admin_config.json"
+ADMIN_CONFIG_PATH = Path(
+    os.environ.get("NUPICAI_ADMIN_CONFIG", str(RUNTIME_DIR / "admin_config.json"))
+).expanduser()
+if _legacy_admin_config.is_file() and not ADMIN_CONFIG_PATH.exists():
+    ADMIN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_legacy_admin_config, ADMIN_CONFIG_PATH)
+    os.chmod(ADMIN_CONFIG_PATH, 0o600)
 SESSION_COOKIE = "nupicai_session"
 SESSION_DAYS = max(1, int(os.environ.get("NUPICAI_SESSION_DAYS", "30")))
 DATA_RETENTION_HOURS = max(1, int(os.environ.get("NUPICAI_DATA_RETENTION_HOURS", "24")))
+FREE_SECONDS = max(0, int(os.environ.get("NUPICAI_FREE_SECONDS", "300")))
+ADMIN_EMAILS = tuple(
+    email.strip().lower()
+    for email in os.environ.get("NUPICAI_ADMIN_EMAILS", "").split(",")
+    if email.strip()
+)
 SECURE_COOKIES = os.environ.get("NUPICAI_SECURE_COOKIES", "0").strip().lower() in {"1", "true", "yes", "on"}
-AUTH_STORE = AuthStore(HERE / "runtime/nupicai.sqlite3", session_days=SESSION_DAYS)
+MAX_UPLOAD_BYTES = max(1, int(os.environ.get("NUPICAI_MAX_UPLOAD_MB", "1024"))) * 1024 * 1024
+MAX_VOICE_PROMPT_BYTES = max(1, int(os.environ.get("NUPICAI_MAX_VOICE_PROMPT_MB", "100"))) * 1024 * 1024
+PUBLIC_SITE_URL = os.environ.get(
+    "NUPICAI_PUBLIC_URL", os.environ.get("NEXT_PUBLIC_SITE_URL", "http://localhost:8765")
+).strip().rstrip("/")
+PASSWORD_RESET_TTL_SECONDS = max(300, int(os.environ.get("NUPICAI_PASSWORD_RESET_TTL_SECONDS", "3600")))
+TERMS_VERSION = "2026-08-29"
+PRIVACY_VERSION = "2026-08-29"
+AUTH_STORE = AuthStore(
+    RUNTIME_DIR / "nupicai.sqlite3",
+    session_days=SESSION_DAYS,
+    free_seconds=FREE_SECONDS,
+    admin_emails=ADMIN_EMAILS,
+)
 
 # Production TTS profiles. All runtime artifacts must stay inside this folder.
 TTS_DAEMON     = TTS_LOCAL / "tts_daemon.py"
@@ -92,6 +123,7 @@ if TTS_CKPT is None or not Path(TTS_CKPT).exists():
     )
 
 _STYLEENC128_COMPETE_CKPT = MODELS_LOCAL / "tts/checkpoints/styleenc128_lstm.pt"
+_MASKGIT_CONTINUITY_CKPT = MODELS_LOCAL / "tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt"
 _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
     "mini_dualpath": {
         "label": "MiniDualPath learned voice",
@@ -102,6 +134,11 @@ _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
         "label": "StyleEnc128 LSTM",
         "description": "trainable style encoder checkpoint + stateful LSTM duration",
         "checkpoint": _STYLEENC128_COMPETE_CKPT,
+    },
+    "maskgit_continuity": {
+        "label": "TDA-MaskGIT continuity",
+        "description": "duration bins + MaskGIT + previous rhythm and acoustic memory",
+        "checkpoint": _MASKGIT_CONTINUITY_CKPT,
     },
 }
 TTS_MODEL_PROFILES: dict[str, dict[str, Any]] = {
@@ -236,7 +273,14 @@ def _init_voice_bank_speakers() -> bool:
         _SPEAKER_VOICE_EMB[label] = str(emb_path)
         dense_sid = _dense_speaker_id(sid)
         _SPEAKER_ID_BY_LABEL[label] = dense_sid
-        result.append({"label": label, "id": dense_sid, "raw_id": int(sid), "voice_bank": True, "rank": rank})
+        result.append({
+            "label": label,
+            "display_name": name,
+            "id": dense_sid,
+            "raw_id": int(sid),
+            "voice_bank": True,
+            "rank": rank,
+        })
 
     if not result:
         return False
@@ -309,6 +353,10 @@ def _resolve_tts_profile(profile: str | None) -> tuple[str, Path]:
     if key not in TTS_MODEL_PROFILES:
         key = DEFAULT_TTS_PROFILE
     return key, Path(TTS_MODEL_PROFILES[key]["checkpoint"])
+
+
+def _tts_continuity_enabled(profile: str | None) -> bool:
+    return str(profile or "").strip() == "maskgit_continuity"
 
 
 def _stop_daemon_locked() -> None:
@@ -828,6 +876,10 @@ core._CONFIG = {
     "translation_temperature": 0.1,
     "translation_timeout_seconds": 180,
     "translation_retry": 2,
+    "tts_profile": DEFAULT_TTS_PROFILE,
+    "mel_steps_first": 8,
+    "mel_steps_second": 3,
+    "mel_twopass_t_noise": 0.12,
     "work_dir": str(_WORK),
     "outputs_dir": str(_WORK / "outputs"),
     "wegorz_ckpt": str(MODELS_LOCAL / "translate/wegorz_translator_32k_best.pt"),
@@ -850,6 +902,7 @@ core._CONFIG["translation_api_key"] = (
 
 
 def _load_admin_config() -> None:
+    global DEFAULT_TTS_PROFILE, TTS_CKPT
     try:
         data = json.loads(ADMIN_CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -862,6 +915,17 @@ def _load_admin_config() -> None:
             core._CONFIG[key] = value
     if data.get("translation_batch_segments") is not None:
         core._CONFIG["translation_batch_segments"] = max(1, min(20, int(data["translation_batch_segments"])))
+    saved_profile = str(data.get("tts_profile", "")).strip()
+    if saved_profile in TTS_MODEL_PROFILES:
+        DEFAULT_TTS_PROFILE = saved_profile
+        TTS_CKPT = Path(TTS_MODEL_PROFILES[saved_profile]["checkpoint"])
+        core._CONFIG["tts_profile"] = saved_profile
+    if data.get("mel_steps_first") is not None:
+        core._CONFIG["mel_steps_first"] = max(1, min(32, int(data["mel_steps_first"])))
+    if data.get("mel_steps_second") is not None:
+        core._CONFIG["mel_steps_second"] = max(0, min(16, int(data["mel_steps_second"])))
+    if data.get("mel_twopass_t_noise") is not None:
+        core._CONFIG["mel_twopass_t_noise"] = max(0.0, min(1.0, float(data["mel_twopass_t_noise"])))
     saved_key = str(data.get("translation_api_key", "")).strip()
     if saved_key and not os.environ.get("NUPIC_API_KEY", "").strip():
         core._CONFIG["translation_api_key"] = saved_key
@@ -874,6 +938,10 @@ def _save_admin_config() -> None:
         "translation_mode": str(core._CONFIG.get("translation_mode", "")),
         "translation_batch_segments": int(core._CONFIG.get("translation_batch_segments", 8)),
         "translation_api_key": str(core._CONFIG.get("translation_api_key", "")),
+        "tts_profile": str(core._CONFIG.get("tts_profile", DEFAULT_TTS_PROFILE)),
+        "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 8)),
+        "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 3)),
+        "mel_twopass_t_noise": float(core._CONFIG.get("mel_twopass_t_noise", 0.12)),
     }
     tmp = ADMIN_CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -883,9 +951,10 @@ def _save_admin_config() -> None:
 
 _load_admin_config()
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile  # noqa: E402
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse  # noqa: E402
+from fastapi.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 import uvicorn  # noqa: E402
@@ -910,12 +979,75 @@ class Job:
     error: str | None = None
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
     created_at: float = field(default_factory=time.time)
+    usage_reserved: bool = False
 
 
 _jobs: dict[str, Job] = {}
 _MODEL_READY = asyncio.Event()
 _TTS_READY = asyncio.Event()
 _cleanup_task: asyncio.Task[None] | None = None
+_rate_lock = threading.Lock()
+_rate_events: dict[str, deque[float]] = defaultdict(deque)
+
+_MEDIA_EXTENSIONS = {
+    ".aac", ".avi", ".flac", ".m4a", ".mka", ".mkv", ".mov", ".mp3",
+    ".mp4", ".mpeg", ".mpg", ".ogg", ".opus", ".wav", ".webm", ".wma",
+}
+
+
+def _client_key(request: Request, scope: str, identity: str = "") -> str:
+    host = request.client.host if request.client is not None else "unknown"
+    identity_hash = hashlib.sha256(identity.strip().lower().encode("utf-8")).hexdigest()[:16] if identity else ""
+    return f"{scope}:{host}:{identity_hash}"
+
+
+def _enforce_rate_limit(
+    request: Request,
+    scope: str,
+    *,
+    limit: int,
+    window: int,
+    identity: str = "",
+) -> None:
+    now = time.monotonic()
+    key = _client_key(request, scope, identity)
+    with _rate_lock:
+        events = _rate_events[key]
+        while events and events[0] <= now - window:
+            events.popleft()
+        if len(events) >= limit:
+            retry_after = max(1, int(window - (now - events[0])))
+            raise HTTPException(
+                status_code=429,
+                detail="Zbyt wiele prób. Spróbuj ponownie później.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        events.append(now)
+
+
+async def _save_upload(
+    upload: UploadFile,
+    destination: Path,
+    *,
+    max_bytes: int,
+) -> int:
+    suffix = destination.suffix.lower()
+    if suffix not in _MEDIA_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Nieobsługiwany format pliku audio lub wideo")
+    written = 0
+    try:
+        with destination.open("wb") as fh:
+            while chunk := await upload.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="Przesłany plik przekracza dozwolony rozmiar")
+                fh.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
+    return written
 
 
 def _user_work_dir(user_id: str) -> Path:
@@ -962,8 +1094,35 @@ def _public_user(user: User) -> dict[str, Any]:
         "email": user.email,
         "display_name": user.display_name,
         "created_at": user.created_at,
+        "is_admin": user.is_admin,
+        "unlimited_usage": user.unlimited_usage,
         "data_retention_hours": DATA_RETENTION_HOURS,
+        "usage": AUTH_STORE.usage(user.id),
     }
+
+
+def _reserve_job_usage(job: Job, seconds: float) -> None:
+    AUTH_STORE.reserve_usage(job.owner_id, job.id, job.kind, seconds)
+    job.usage_reserved = True
+
+
+def _settle_job_usage(job: Job, seconds: float) -> dict[str, int | str] | None:
+    usage = AUTH_STORE.settle_usage(job.id, seconds) if job.usage_reserved else None
+    job.usage_reserved = False
+    return usage
+
+
+def _release_job_usage(job: Job) -> None:
+    if job.usage_reserved:
+        AUTH_STORE.release_usage(job.id)
+        job.usage_reserved = False
+
+
+def _discard_unstarted_job(job: Job) -> None:
+    _release_job_usage(job)
+    _jobs.pop(job.id, None)
+    if job.work_dir is not None:
+        shutil.rmtree(job.work_dir, ignore_errors=True)
 
 
 def _cleanup_expired_user_files(*, now: float | None = None) -> dict[str, int]:
@@ -1333,52 +1492,96 @@ def _yt_dlp_extra_args() -> list[str]:
         args += ["--cookies", str(Path(cookies_file).expanduser())]
     elif cookies_browser:
         args += ["--cookies-from-browser", cookies_browser]
+    extractor_args = os.environ.get("WEGORZ_YTDLP_EXTRACTOR_ARGS", "").strip()
+    if extractor_args:
+        args += ["--extractor-args", extractor_args]
     return args
 
 
-def _download_youtube_video(url: str, work_dir: Path) -> Path:
+def _yt_dlp_error_message(details: str) -> tuple[str, bool]:
+    value = details.lower()
+    if any(text in value for text in ("private video", "video unavailable", "has been removed")):
+        return "Film jest prywatny, usunięty albo niedostępny.", False
+    if any(text in value for text in ("not available in your country", "geo restricted", "geographic restriction")):
+        return "Film jest niedostępny w lokalizacji serwera.", False
+    if any(text in value for text in ("sign in", "cookies", "confirm you're not a bot", "login required")):
+        return (
+            "YouTube wymaga uwierzytelnienia. Administrator powinien skonfigurować "
+            "WEGORZ_YTDLP_COOKIES_FILE albo WEGORZ_YTDLP_COOKIES_FROM_BROWSER.",
+            False,
+        )
+    if any(text in value for text in ("http error 403", "forbidden", "signature", "nsig", "po token")):
+        return (
+            "YouTube odrzucił adres strumienia (403 lub token odtwarzacza). "
+            "Spróbuj ponownie; jeśli błąd się powtarza, administrator powinien zaktualizować "
+            "yt-dlp[default] i sprawdzić konfigurację Deno/PO Token.",
+            True,
+        )
+    if any(text in value for text in ("timed out", "temporary failure", "connection reset", "network is unreachable")):
+        return "Tymczasowy błąd połączenia podczas pobierania filmu.", True
+    return "Nie udało się pobrać filmu przez yt-dlp.", True
+
+
+def _download_youtube_video(
+    url: str,
+    work_dir: Path,
+    progress: Any | None = None,
+) -> Path:
     core.require_executable("ffmpeg")
-    token = uuid.uuid4().hex[:12]
-    out_template = str(work_dir / f"yt_{token}.%(ext)s")
-    cmd = core.yt_dlp_command() + _yt_dlp_extra_args() + [
-        "--no-playlist",
-        "--no-progress",
-        "--retries", "3",
-        "--fragment-retries", "3",
-        "-f", "bv*+ba/best",
-        "--merge-output-format", "mp4",
-        "-o", out_template,
-        str(url),
+    attempts = [
+        ("najlepsza jakość", "bv*+ba/best"),
+        ("zgodny strumień MP4", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"),
     ]
-    result = subprocess.run(cmd, check=False, text=True, capture_output=True)
-    if result.stdout:
-        print(result.stdout, end="", flush=True)
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr, flush=True)
-    if result.returncode != 0:
-        details = f"{result.stdout}\n{result.stderr}".lower()
-        if "sign in" in details or "cookies" in details or "confirm you're not a bot" in details:
-            hint = (
-                " YouTube wymaga cookies. Ustaw WEGORZ_YTDLP_COOKIES_FROM_BROWSER=firefox "
-                "albo WEGORZ_YTDLP_COOKIES_FILE=/sciezka/cookies.txt i uruchom serwer ponownie."
-            )
-        else:
-            hint = " Sprawdź połączenie z siecią oraz aktualność pakietu yt-dlp."
-        raise RuntimeError(f"Nie udało się pobrać filmu przez yt-dlp.{hint}")
-    candidates = sorted(work_dir.glob(f"yt_{token}.*"), key=lambda p: p.stat().st_mtime)
-    mp4s = [p for p in candidates if p.suffix.lower() == ".mp4"]
-    if mp4s:
-        return mp4s[-1]
-    if candidates:
-        return candidates[-1]
-    raise RuntimeError("yt-dlp zakończył pracę, ale nie utworzył pliku wideo")
+    diagnostics: list[str] = []
+    final_message = "Nie udało się pobrać filmu przez yt-dlp."
+    for attempt_index, (label, format_selector) in enumerate(attempts, start=1):
+        token = uuid.uuid4().hex[:12]
+        out_template = str(work_dir / f"yt_{token}.%(ext)s")
+        if progress is not None:
+            progress(attempt_index, len(attempts), label)
+        cmd = core.yt_dlp_command() + _yt_dlp_extra_args() + [
+            "--no-playlist", "--no-progress", "--no-part",
+            "--socket-timeout", "30",
+            "--retries", "3", "--fragment-retries", "3", "--extractor-retries", "3",
+            "--retry-sleep", "extractor:exp=1:8", "--retry-sleep", "http:exp=1:8",
+            "-f", format_selector,
+            "--merge-output-format", "mp4",
+            "-o", out_template,
+            str(url),
+        ]
+        result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+        details = f"{result.stdout}\n{result.stderr}".strip()
+        diagnostics.append(f"=== Próba {attempt_index}: {label} ===\n{details}\n")
+        if result.stdout:
+            print(result.stdout, end="", flush=True)
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr, flush=True)
+        candidates = sorted(work_dir.glob(f"yt_{token}.*"), key=lambda p: p.stat().st_mtime)
+        complete = [p for p in candidates if p.is_file() and p.stat().st_size > 0]
+        if result.returncode == 0 and complete:
+            mp4s = [p for p in complete if p.suffix.lower() == ".mp4"]
+            return (mp4s or complete)[-1]
+        for candidate in candidates:
+            candidate.unlink(missing_ok=True)
+        final_message, retryable = _yt_dlp_error_message(details)
+        if not retryable:
+            break
+    (work_dir / "yt_dlp_attempts.log").write_text("\n".join(diagnostics), encoding="utf-8")
+    raise RuntimeError(final_message)
 
 
 def _worker_transcribe_youtube(job: Job, url: str) -> None:
     try:
         job.status = "running"
         _push(job, {"type": "progress", "progress": 0.02, "message": "Pobieram film z YouTube…"})
-        video_path = _download_youtube_video(url, _job_work_dir(job))
+        def report(attempt: int, total: int, label: str) -> None:
+            _push(job, {
+                "type": "progress",
+                "progress": 0.02 + (attempt - 1) * 0.01,
+                "message": f"Pobieram film z YouTube ({attempt}/{total}: {label})…",
+            })
+
+        video_path = _download_youtube_video(url, _job_work_dir(job), report)
         _worker_transcribe(job, video_path)
     except Exception as exc:
         job.status = "error"
@@ -1507,6 +1710,7 @@ class DubRequest(BaseModel):
     speaker_label: str
     tts_model_profile: str = DEFAULT_TTS_PROFILE
     transcribe_job_id: str = ""
+    reuse_dub_job_id: str = ""
     target_lang: str = "pl"
     base_speed: float = 1.0
     max_adaptive_speed: float = 1.3
@@ -1524,6 +1728,65 @@ class DubRequest(BaseModel):
     original_gain: float = 0.22
     dubbing_gain: float = 1.0
     ducking_strength: float = 0.65
+
+
+def _dub_segment_render_key(
+    seg: dict[str, Any],
+    req: DubRequest,
+    *,
+    target_budget: float,
+    position: int,
+) -> str:
+    payload = {
+        "text": str(seg.get("translation") or seg.get("text", "")).strip(),
+        "speaker": str(seg.get("speaker_label") or req.speaker_label),
+        "model": req.tts_model_profile,
+        "lang": req.target_lang,
+        "base_speed": round(float(req.base_speed), 5),
+        "max_speed": round(float(req.max_adaptive_speed), 5),
+        "target_budget": round(float(target_budget), 3),
+        "steps": [int(req.mel_steps_first), int(req.mel_steps_second)],
+        "noise": round(float(req.mel_twopass_t_noise), 5),
+        "silence": bool(req.digital_silence),
+        "pause_edge": int(req.pause_edge_frames),
+        "emotion": [req.emotion_group, round(float(req.emotion_strength), 4)],
+        "seed": int(seg.get("seed", 1234 + position)),
+        "render_nonce": int(seg.get("render_nonce", 0)),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _estimate_dub_generation_seconds(req: DubRequest, timeline_seconds: float) -> float:
+    if not req.reuse_dub_job_id:
+        return max(2.0, timeline_seconds * 1.10)
+    prior_job = _jobs.get(req.reuse_dub_job_id)
+    prior_items = list((prior_job.result or {}).get("segments") or []) if prior_job else []
+    prior_segments = {
+        str(item.get("segment_id")): dict(item)
+        for item in prior_items
+        if item.get("segment_id")
+    }
+    changed_budget = 0.0
+    for index, segment in enumerate(req.segments):
+        segment_id = str(segment.get("segment_id") or f"segment-{index}")
+        cached = prior_segments.get(segment_id, {})
+        start = float(segment.get("start", 0.0))
+        next_start = (
+            float(req.segments[index + 1].get("start", segment.get("end", start)))
+            if index + 1 < len(req.segments)
+            else float(segment.get("end", start)) + float(req.extra_tail_sec)
+        )
+        target_budget = max(0.05, float(cached.get("target_budget", next_start - start)))
+        render_key = _dub_segment_render_key(
+            segment, req, target_budget=target_budget, position=index
+        )
+        cached_path = Path(str(cached.get("segment_audio_path", "")))
+        if cached.get("render_key") != render_key or not cached_path.is_file():
+            changed_budget += max(0.25, next_start - start)
+    # A changed segment can move the placement budget of its immediate successor.
+    return max(1.0, changed_budget * 1.5)
 
 
 def _render_audio_mix(
@@ -1574,7 +1837,15 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
         _push(job, {"type": "progress", "progress": 0.01, "message": "Przygotowuję TTS…"})
         _validate_segment_timeline(req.segments, stage="dubbing")
 
-        speaker_payload = _speaker_condition_payload(req.speaker_label)
+        prior_segments: dict[str, dict[str, Any]] = {}
+        if req.reuse_dub_job_id:
+            prior_job = _jobs.get(req.reuse_dub_job_id)
+            if prior_job and prior_job.status == "done" and prior_job.result:
+                prior_segments = {
+                    str(item.get("segment_id")): dict(item)
+                    for item in list(prior_job.result.get("segments") or [])
+                    if item.get("segment_id")
+                }
 
         SR = 24000
         segs = req.segments
@@ -1583,6 +1854,9 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
         full = np.zeros(int(video_dur * SR), dtype=np.float32)
         last_end = 0.0
         meta_segments: list[dict[str, Any]] = []
+        reused_segments = 0
+        generated_audio_seconds = 0.0
+        continuity_seen: set[str] = set()
 
         out_dir = _job_work_dir(job) / "dub"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1596,6 +1870,17 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
             next_start = float(segs[i + 1].get("start", src_end)) if i + 1 < n else src_end + float(req.extra_tail_sec)
             place = max(src_start, last_end + 0.04 if i > 0 else src_start)
             target_budget = max(0.05, next_start - place)
+            segment_id = str(seg.get("segment_id") or f"segment-{i}")
+            segment_speaker = str(seg.get("speaker_label") or req.speaker_label)
+            speaker_payload = _speaker_condition_payload(segment_speaker)
+            render_key = _dub_segment_render_key(seg, req, target_budget=target_budget, position=i)
+            continuity_enabled = _tts_continuity_enabled(req.tts_model_profile)
+            continuity_key = (
+                f"dub:{job.id}:{req.tts_model_profile}:{segment_speaker}"
+                if continuity_enabled
+                else f"dub:{job.id}:{segment_speaker}:seg{i:04d}"
+            )
+            continuity_reset = continuity_enabled and continuity_key not in continuity_seen
 
             _push(job, {
                 "type": "progress",
@@ -1612,7 +1897,7 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
                     "mel_steps_first": req.mel_steps_first,
                     "mel_steps_second": req.mel_steps_second,
                     "mel_twopass_t_noise": req.mel_twopass_t_noise,
-                    "seed": 1234 + i,
+                    "seed": int(seg.get("seed", 1234 + i)) + int(seg.get("render_nonce", 0)),
                     "out_dir": str(out_dir),
                     "tag": tag,
                     "lang": req.target_lang,
@@ -1623,32 +1908,52 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
                     "emotion_group": req.emotion_group,
                     "emotion_strength": req.emotion_strength,
                     "tts_model_profile": req.tts_model_profile,
-                    # Dubbing segments are independent ASR chunks. Reusing one bridge
-                    # state across segments can swallow short leading words.
-                    "continuity_key": f"dub:{job.id}:{req.speaker_label}:seg{i:04d}",
-                    "continuity_reset": True,
+                    "continuity_key": continuity_key,
+                    "continuity_reset": continuity_reset if continuity_enabled else True,
                 }
                 resp = _daemon_synth_chunked_response(base, out_dir=str(out_dir), tag=tag)
                 synth_at.last_debug = resp
                 return str(resp["wav"])
             synth_at.last_debug = {}
 
-            actual_speed = float(req.base_speed)
-            fit_retries = 0
-            snapshot_id = _daemon_state_snapshot(req.tts_model_profile)
-            wav_path = synth_at(actual_speed)
-            wav_dur = _ffprobe_dur(Path(wav_path))
-            debug_info = dict(getattr(synth_at, "last_debug", {}) or {})
-            hard_speed = max(float(req.base_speed), min(float(req.max_adaptive_speed), 1.3))
-            if wav_dur > target_budget + 0.02 and actual_speed < hard_speed - 1e-6:
-                retry_speed = min(hard_speed, actual_speed * (wav_dur / target_budget) * 1.03)
-                if retry_speed > actual_speed + 0.01:
-                    _daemon_state_restore(snapshot_id, req.tts_model_profile)
-                    actual_speed = retry_speed
-                    fit_retries = 1
-                    wav_path = synth_at(actual_speed, "_fit")
-                    wav_dur = _ffprobe_dur(Path(wav_path))
-                    debug_info = dict(getattr(synth_at, "last_debug", {}) or {})
+            cached = prior_segments.get(segment_id, {})
+            cached_path = Path(str(cached.get("segment_audio_path", "")))
+            # A cached WAV cannot reconstruct the acoustic/rhythm state expected by
+            # the next segment, so continuity renders are regenerated in sequence.
+            can_reuse = (
+                not continuity_enabled
+                and cached.get("render_key") == render_key
+                and cached_path.is_file()
+            )
+            if can_reuse:
+                reused_path = out_dir / f"seg_{job.id[:8]}_{i:04d}_reused.wav"
+                shutil.copy2(cached_path, reused_path)
+                wav_path = str(reused_path)
+                wav_dur = _ffprobe_dur(reused_path)
+                actual_speed = float(cached.get("speed", req.base_speed))
+                fit_retries = int(cached.get("fit_retries", 0))
+                debug_info = dict(cached.get("tts_debug") or {})
+                reused_segments += 1
+            else:
+                actual_speed = float(req.base_speed)
+                fit_retries = 0
+                snapshot_id = _daemon_state_snapshot(req.tts_model_profile)
+                wav_path = synth_at(actual_speed)
+                wav_dur = _ffprobe_dur(Path(wav_path))
+                debug_info = dict(getattr(synth_at, "last_debug", {}) or {})
+                hard_speed = max(float(req.base_speed), min(float(req.max_adaptive_speed), 1.3))
+                if wav_dur > target_budget + 0.02 and actual_speed < hard_speed - 1e-6:
+                    retry_speed = min(hard_speed, actual_speed * (wav_dur / target_budget) * 1.03)
+                    if retry_speed > actual_speed + 0.01:
+                        _daemon_state_restore(snapshot_id, req.tts_model_profile)
+                        actual_speed = retry_speed
+                        fit_retries = 1
+                        wav_path = synth_at(actual_speed, "_fit")
+                        wav_dur = _ffprobe_dur(Path(wav_path))
+                        debug_info = dict(getattr(synth_at, "last_debug", {}) or {})
+                generated_audio_seconds += wav_dur
+                if continuity_enabled:
+                    continuity_seen.add(continuity_key)
 
             audio, file_sr = sf.read(wav_path)
             if audio.ndim > 1:
@@ -1678,6 +1983,11 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
             )
             meta_segments.append({
                 "index": int(seg.get("index", i)),
+                "segment_id": segment_id,
+                "speaker_label": segment_speaker,
+                "render_key": render_key,
+                "segment_audio_path": str(wav_path),
+                "reused": can_reuse,
                 "text": text,
                 "start": round(place, 3),
                 "source_start": round(src_start, 3),
@@ -1718,6 +2028,8 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
             "duration": round(last_end, 3),
             "transcribe_job_id": req.transcribe_job_id,
             "segments": meta_segments,
+            "reused_segments": reused_segments,
+            "generated_segments": n - reused_segments,
             "debug_log": str(debug_log),
             "mix": {
                 "original_gain": round(float(req.original_gain), 3),
@@ -1725,6 +2037,9 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
                 "ducking_strength": round(float(req.ducking_strength), 3),
             },
         }
+        usage = _settle_job_usage(job, generated_audio_seconds if req.reuse_dub_job_id else last_end)
+        if usage is not None:
+            result["usage"] = usage
         job.result = result
         job.status = "done"
         _push(job, {"type": "done", "progress": 1.0,
@@ -1733,6 +2048,7 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
 
     except Exception as exc:
         import traceback
+        _release_job_usage(job)
         job.status = "error"
         job.error = str(exc)
         _push(job, {"type": "error", "error": f"{exc}\n{traceback.format_exc()[-1000:]}"})
@@ -1749,16 +2065,47 @@ _cors_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type"],
     allow_credentials=True,
 )
+_allowed_hosts = [
+    value.strip() for value in os.environ.get("NUPICAI_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+if _allowed_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), geolocation=(), microphone=(self), payment=()"
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; "
+        "font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    if SECURE_COOKIES:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if request.url.path.startswith(("/auth/", "/account/", "/admin/")):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 @app.on_event("startup")
 async def _startup() -> None:
     global _loop, _cleanup_task
     _loop = asyncio.get_running_loop()
+    released = AUTH_STORE.release_orphaned_reservations()
+    if released:
+        print(f"ℹ️ Released {released} orphaned usage reservations after restart.", flush=True)
     await asyncio.to_thread(_cleanup_expired_user_files)
     _cleanup_task = asyncio.create_task(_periodic_cleanup())
     _warm_model()
@@ -1813,8 +2160,9 @@ async def _sse_stream(job: Job) -> AsyncGenerator[str, None]:
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    ready = _MODEL_READY.is_set() and _TTS_READY.is_set()
     return {
-        "status": "ok",
+        "status": "ready" if ready else "starting",
         "model_ready": _MODEL_READY.is_set(),
         "tts_ready": _TTS_READY.is_set(),
         "tts_profile": _daemon_active_profile or DEFAULT_TTS_PROFILE,
@@ -1825,14 +2173,16 @@ async def health() -> dict[str, Any]:
     }
 
 
-def _require_admin(token: str) -> None:
-    if not ADMIN_TOKEN:
-        raise HTTPException(
-            status_code=503,
-            detail="Panel administratora wymaga WEGORZ_ADMIN_TOKEN w środowisku serwera.",
-        )
-    if not token or not secrets.compare_digest(token, ADMIN_TOKEN):
-        raise HTTPException(status_code=401, detail="Nieprawidłowy token administratora")
+@app.get("/ready")
+async def readiness() -> JSONResponse:
+    payload = await health()
+    return JSONResponse(payload, status_code=200 if payload["status"] == "ready" else 503)
+
+
+def _require_admin_user(user: User = Depends(_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="To konto nie ma uprawnień administratora")
+    return user
 
 
 def _masked_secret(value: str) -> str:
@@ -1850,6 +2200,10 @@ class AdminSettingsRequest(BaseModel):
     translation_batch_segments: int = 8
     translation_api_key: str = ""
     clear_translation_api_key: bool = False
+    tts_profile: str = DEFAULT_TTS_PROFILE
+    mel_steps_first: int = 8
+    mel_steps_second: int = 3
+    mel_twopass_t_noise: float = 0.12
 
 
 class RegisterRequest(BaseModel):
@@ -1861,6 +2215,19 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: str
+    password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class DeleteAccountRequest(BaseModel):
     password: str
 
 
@@ -1876,12 +2243,61 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+def _send_password_reset_email(email: str, token: str) -> None:
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    from_address = os.environ.get("NUPICAI_EMAIL_FROM", "").strip()
+    if not api_key or not from_address:
+        raise RuntimeError("Brak RESEND_API_KEY lub NUPICAI_EMAIL_FROM")
+    parsed_site = urlparse(PUBLIC_SITE_URL)
+    if parsed_site.scheme not in {"http", "https"} or not parsed_site.netloc:
+        raise RuntimeError("NUPICAI_PUBLIC_URL ma nieprawidłowy format")
+    # URL fragments are handled by the browser and do not enter reverse-proxy access logs.
+    reset_url = f"{PUBLIC_SITE_URL}/#reset_token={token}"
+    safe_url = html.escape(reset_url, quote=True)
+    payload = json.dumps({
+        "from": from_address,
+        "to": [email],
+        "subject": "Reset hasła NupicAI",
+        "html": (
+            "<p>Otrzymaliśmy prośbę o zmianę hasła do konta NupicAI.</p>"
+            f'<p><a href="{safe_url}">Ustaw nowe hasło</a></p>'
+            f"<p>Link wygaśnie za {PASSWORD_RESET_TTL_SECONDS // 60} minut. "
+            "Jeżeli to nie Ty, zignoruj tę wiadomość.</p>"
+        ),
+        "text": (
+            "Otrzymaliśmy prośbę o zmianę hasła do konta NupicAI.\n\n"
+            f"Ustaw nowe hasło: {reset_url}\n\n"
+            f"Link wygaśnie za {PASSWORD_RESET_TTL_SECONDS // 60} minut."
+        ),
+    }).encode("utf-8")
+    request = UrlRequest(
+        "https://api.resend.com/emails",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Idempotency-Key": f"password-reset/{hashlib.sha256(token.encode()).hexdigest()[:32]}",
+        },
+    )
+    with urlopen(request, timeout=15) as response:
+        if not 200 <= int(response.status) < 300:
+            raise RuntimeError(f"Resend HTTP {response.status}")
+
+
 @app.post("/auth/register")
-async def register(req: RegisterRequest, response: Response) -> dict[str, Any]:
+async def register(req: RegisterRequest, request: Request, response: Response) -> dict[str, Any]:
+    _enforce_rate_limit(request, "register", limit=5, window=3600)
     if not req.terms_accepted:
         raise HTTPException(status_code=400, detail="Zaakceptuj regulamin i politykę prywatności")
     try:
-        user = AUTH_STORE.register(req.email, req.display_name, req.password)
+        user = AUTH_STORE.register(
+            req.email,
+            req.display_name,
+            req.password,
+            terms_version=TERMS_VERSION,
+            privacy_version=PRIVACY_VERSION,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     token, _ = AUTH_STORE.create_session(user.id)
@@ -1891,13 +2307,45 @@ async def register(req: RegisterRequest, response: Response) -> dict[str, Any]:
 
 
 @app.post("/auth/login")
-async def login(req: LoginRequest, response: Response) -> dict[str, Any]:
+async def login(req: LoginRequest, request: Request, response: Response) -> dict[str, Any]:
+    _enforce_rate_limit(request, "login", limit=10, window=900)
+    _enforce_rate_limit(request, "login-account", limit=10, window=900, identity=req.email)
     user = AUTH_STORE.authenticate(req.email, req.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Nieprawidłowy e-mail lub hasło")
     token, _ = AUTH_STORE.create_session(user.id)
     _set_session_cookie(response, token)
     return {"user": _public_user(user)}
+
+
+@app.post("/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest, request: Request) -> dict[str, Any]:
+    _enforce_rate_limit(request, "forgot-password", limit=5, window=3600)
+    _enforce_rate_limit(request, "forgot-password-account", limit=3, window=3600, identity=req.email)
+    token = AUTH_STORE.create_password_reset(req.email, ttl_seconds=PASSWORD_RESET_TTL_SECONDS)
+    if token:
+        try:
+            email = AUTH_STORE.normalize_email(req.email)
+            await asyncio.to_thread(_send_password_reset_email, email, token)
+        except Exception as exc:
+            # The public response must not reveal whether the account exists.
+            print(f"⚠️ Nie udało się wysłać resetu hasła: {exc}", file=sys.stderr, flush=True)
+    return {
+        "ok": True,
+        "message": "Jeśli konto istnieje, wysłaliśmy link do zmiany hasła.",
+    }
+
+
+@app.post("/auth/reset-password")
+async def reset_password(req: ResetPasswordRequest, request: Request) -> dict[str, Any]:
+    _enforce_rate_limit(request, "reset-password", limit=10, window=3600)
+    try:
+        changed = AUTH_STORE.reset_password(req.token, req.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not changed:
+        raise HTTPException(status_code=400, detail="Link jest nieprawidłowy albo wygasł")
+    return {"ok": True, "message": "Hasło zostało zmienione. Zaloguj się ponownie."}
 
 
 @app.post("/auth/logout")
@@ -1910,6 +2358,11 @@ async def logout(request: Request, response: Response) -> dict[str, bool]:
 @app.get("/auth/me")
 async def auth_me(user: User = Depends(_current_user)) -> dict[str, Any]:
     return {"user": _public_user(user)}
+
+
+@app.get("/account/usage")
+async def account_usage(user: User = Depends(_current_user)) -> dict[str, Any]:
+    return {"usage": AUTH_STORE.usage(user.id)}
 
 
 @app.delete("/account/files")
@@ -1934,9 +2387,35 @@ async def delete_account_files(user: User = Depends(_current_user)) -> dict[str,
     return {"ok": True, "removed_bytes": removed_bytes}
 
 
+@app.delete("/account")
+async def delete_account(
+    req: DeleteAccountRequest,
+    request: Request,
+    response: Response,
+    user: User = Depends(_current_user),
+) -> dict[str, bool]:
+    active = [
+        job for job in _jobs.values()
+        if job.owner_id == user.id and job.status in {"pending", "running"}
+    ]
+    if active:
+        raise HTTPException(status_code=409, detail="Poczekaj na zakończenie aktywnych zadań")
+    if not AUTH_STORE.delete_user(user.id, req.password):
+        raise HTTPException(status_code=401, detail="Nieprawidłowe hasło")
+    shutil.rmtree(_WORK / "users" / user.id, ignore_errors=True)
+    for job_id in [job.id for job in _jobs.values() if job.owner_id == user.id]:
+        _jobs.pop(job_id, None)
+    for label, owner_id in list(_CUSTOM_SPEAKER_OWNER.items()):
+        if owner_id == user.id:
+            _CUSTOM_SPEAKER_OWNER.pop(label, None)
+            _SPEAKER_MEL.pop(label, None)
+            _SPEAKER_LIST[:] = [entry for entry in _SPEAKER_LIST if entry.get("label") != label]
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
 @app.get("/admin/settings")
-async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, Any]:
-    _require_admin(x_admin_token)
+async def admin_settings(_user: User = Depends(_require_admin_user)) -> dict[str, Any]:
     recent_jobs = []
     for job in list(_jobs.values())[-30:][::-1]:
         result = job.result or {}
@@ -1972,7 +2451,15 @@ async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, A
         "translation_batch_segments": int(core._CONFIG.get("translation_batch_segments", 8)),
         "translation_api_key_configured": bool(api_key),
         "translation_api_key_masked": _masked_secret(api_key),
-        "tts_profile": _daemon_active_profile or DEFAULT_TTS_PROFILE,
+        "tts_profile": str(core._CONFIG.get("tts_profile", DEFAULT_TTS_PROFILE)),
+        "tts_active_profile": _daemon_active_profile or DEFAULT_TTS_PROFILE,
+        "tts_models": [
+            {"key": key, "label": str(rec.get("label", key))}
+            for key, rec in TTS_MODEL_PROFILES.items()
+        ],
+        "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 8)),
+        "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 3)),
+        "mel_twopass_t_noise": float(core._CONFIG.get("mel_twopass_t_noise", 0.12)),
         "tts_loaded_profiles": sorted(
             key for key, proc in _daemon_procs.items()
             if proc is not None and proc.poll() is None
@@ -1989,9 +2476,9 @@ async def admin_settings(x_admin_token: str = Header(default="")) -> dict[str, A
 @app.post("/admin/settings")
 async def update_admin_settings(
     req: AdminSettingsRequest,
-    x_admin_token: str = Header(default=""),
+    user: User = Depends(_require_admin_user),
 ) -> dict[str, Any]:
-    _require_admin(x_admin_token)
+    global DEFAULT_TTS_PROFILE, TTS_CKPT
     for key, value in (
         ("translation_endpoint", req.translation_endpoint),
         ("translation_model", req.translation_model),
@@ -2005,14 +2492,26 @@ async def update_admin_settings(
         core._CONFIG["translation_api_key"] = ""
     elif str(req.translation_api_key or "").strip():
         core._CONFIG["translation_api_key"] = str(req.translation_api_key).strip()
+    requested_profile = str(req.tts_profile or "").strip()
+    if requested_profile not in TTS_MODEL_PROFILES:
+        raise HTTPException(status_code=400, detail="Nieznany lub niedostępny profil TTS")
+    DEFAULT_TTS_PROFILE = requested_profile
+    TTS_CKPT = Path(TTS_MODEL_PROFILES[requested_profile]["checkpoint"])
+    core._CONFIG["tts_profile"] = requested_profile
+    core._CONFIG["mel_steps_first"] = max(1, min(32, int(req.mel_steps_first)))
+    core._CONFIG["mel_steps_second"] = max(0, min(16, int(req.mel_steps_second)))
+    core._CONFIG["mel_twopass_t_noise"] = max(0.0, min(1.0, float(req.mel_twopass_t_noise)))
     _save_admin_config()
-    return await admin_settings(x_admin_token)
+    return await admin_settings(user)
 
 
 @app.get("/tts_models")
 async def tts_models(user: User = Depends(_current_user)) -> dict[str, Any]:
+    configured_default = str(core._CONFIG.get("tts_profile", DEFAULT_TTS_PROFILE))
+    if configured_default not in TTS_MODEL_PROFILES:
+        configured_default = DEFAULT_TTS_PROFILE
     return {
-        "default": DEFAULT_TTS_PROFILE,
+        "default": configured_default,
         "active": _daemon_active_profile or DEFAULT_TTS_PROFILE,
         "loaded": sorted(
             key for key, proc in _daemon_procs.items()
@@ -2024,7 +2523,7 @@ async def tts_models(user: User = Depends(_current_user)) -> dict[str, Any]:
                 "label": str(rec.get("label", key)),
                 "description": str(rec.get("description", "")),
                 "checkpoint": str(rec.get("checkpoint", "")),
-                "default": key == DEFAULT_TTS_PROFILE,
+                "default": key == configured_default,
                 "active": key == (_daemon_active_profile or DEFAULT_TTS_PROFILE),
                 "loaded": (
                     key in _daemon_procs
@@ -2034,20 +2533,30 @@ async def tts_models(user: User = Depends(_current_user)) -> dict[str, Any]:
             }
             for key, rec in TTS_MODEL_PROFILES.items()
         ],
+        "flow_defaults": {
+            "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 8)),
+            "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 3)),
+            "mel_twopass_t_noise": float(core._CONFIG.get("mel_twopass_t_noise", 0.12)),
+        },
     }
 
 
 @app.post("/transcribe")
 async def transcribe(
     background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
     user: User = Depends(_current_user),
 ) -> dict[str, str]:
+    _enforce_rate_limit(request, "upload", limit=30, window=3600)
     suffix = Path(file.filename or "audio").suffix or ".wav"
     job = _new_job(user, "transcribe")
     upload_path = _job_work_dir(job) / f"source{suffix}"
-    with upload_path.open("wb") as fh:
-        shutil.copyfileobj(file.file, fh)
+    try:
+        await _save_upload(file, upload_path, max_bytes=MAX_UPLOAD_BYTES)
+    except Exception:
+        _discard_unstarted_job(job)
+        raise
     _executor.submit(_worker_transcribe, job, upload_path)
     return {"job_id": job.id}
 
@@ -2059,11 +2568,18 @@ class YoutubeTranscribeRequest(BaseModel):
 @app.post("/transcribe_youtube")
 async def transcribe_youtube(
     req: YoutubeTranscribeRequest,
+    request: Request,
     user: User = Depends(_current_user),
 ) -> dict[str, str]:
+    _enforce_rate_limit(request, "youtube", limit=20, window=3600)
     url = str(req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Brak URL YouTube")
+    if len(url) > 2048:
+        raise HTTPException(status_code=400, detail="Adres URL jest zbyt długi")
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    if host not in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}:
+        raise HTTPException(status_code=400, detail="Obsługiwane są wyłącznie adresy YouTube")
     job = _new_job(user, "transcribe")
     _executor.submit(_worker_transcribe_youtube, job, url)
     return {"job_id": job.id}
@@ -2073,8 +2589,15 @@ async def transcribe_youtube(
 async def translate(
     background_tasks: BackgroundTasks,
     req: TranslateRequest,
+    request: Request,
     user: User = Depends(_current_user),
 ) -> dict[str, str]:
+    _enforce_rate_limit(request, "translate", limit=120, window=3600)
+    if not req.segments or len(req.segments) > 5000:
+        raise HTTPException(status_code=400, detail="Nieprawidłowa liczba segmentów")
+    total_chars = sum(len(str(segment.get("text") or segment.get("source_text") or "")) for segment in req.segments)
+    if total_chars > 1_000_000:
+        raise HTTPException(status_code=413, detail="Tekst do tłumaczenia jest zbyt długi")
     job = _new_job(user, "translate")
     _executor.submit(_worker_translate, job, req)
     return {"job_id": job.id}
@@ -2106,18 +2629,23 @@ async def list_speakers(user: User = Depends(_current_user)) -> dict[str, Any]:
 
 @app.post("/voice_prompt")
 async def upload_voice_prompt(
+    request: Request,
     file: UploadFile = File(...),
     start_sec: float = Form(0.0),
     max_sec: float = Form(12.0),
     user: User = Depends(_current_user),
 ) -> dict[str, Any]:
+    _enforce_rate_limit(request, "voice-prompt", limit=30, window=3600)
     uid = uuid.uuid4().hex[:10]
     suffix = Path(file.filename or "prompt.wav").suffix or ".wav"
     prompt_dir = _user_work_dir(user.id) / "voice_prompts" / uid
     prompt_dir.mkdir(parents=True, exist_ok=True)
     src = prompt_dir / f"source{suffix}"
-    with src.open("wb") as fh:
-        shutil.copyfileobj(file.file, fh)
+    try:
+        await _save_upload(file, src, max_bytes=MAX_VOICE_PROMPT_BYTES)
+    except Exception:
+        shutil.rmtree(prompt_dir, ignore_errors=True)
+        raise
     wav24 = _convert_media_to_mono24k(src, prompt_dir)
     enc = _daemon_encode_ref_mel(wav24, prompt_dir, start_sec=float(start_sec), max_sec=float(max_sec))
     mel_path = str(enc.get("mel", ""))
@@ -2127,7 +2655,12 @@ async def upload_voice_prompt(
     label = f"[custom] {raw_name} [{uid}]"
     _SPEAKER_MEL[label] = mel_path
     _CUSTOM_SPEAKER_OWNER[label] = user.id
-    entry = {"label": label, "id": 100000 + len(_SPEAKER_LIST), "custom": True}
+    entry = {
+        "label": label,
+        "display_name": raw_name,
+        "id": 100000 + len(_SPEAKER_LIST),
+        "custom": True,
+    }
     _SPEAKER_LIST.insert(0, entry)
     return {
         "speaker": entry,
@@ -2240,6 +2773,9 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
             "chunks": debug_chunks,
             "debug_log": str(out_dir / "tts_debug.json"),
         }
+        usage = _settle_job_usage(job, dur)
+        if usage is not None:
+            result["usage"] = usage
         job.result = result
         job.status = "done"
         _push(job, {"type": "done", "progress": 1.0,
@@ -2247,29 +2783,74 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
 
     except Exception as exc:
         import traceback
+        _release_job_usage(job)
         job.status = "error"
         job.error = str(exc)
         _push(job, {"type": "error", "error": f"{exc}\n{traceback.format_exc()[-1500:]}"})
 
 
 @app.post("/tts_text")
-async def tts_text(req: TextTTSRequest, user: User = Depends(_current_user)) -> dict[str, str]:
+async def tts_text(
+    req: TextTTSRequest,
+    request: Request,
+    user: User = Depends(_current_user),
+) -> dict[str, str]:
+    _enforce_rate_limit(request, "tts", limit=120, window=3600)
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Tekst do syntezy jest pusty")
+    if len(req.text) > 100_000:
+        raise HTTPException(status_code=413, detail="Tekst do syntezy jest zbyt długi")
     owner_id = _CUSTOM_SPEAKER_OWNER.get(req.speaker_label)
     if owner_id is not None and owner_id != user.id:
         raise HTTPException(status_code=404, detail="Speaker not found")
     job = _new_job(user, "tts_text")
+    word_count = max(1, len(re.findall(r"\S+", req.text)))
+    estimate = max(2, int(((word_count / 150.0) * 60.0 / max(0.5, req.speed)) * 1.35 + 0.999))
+    try:
+        _reserve_job_usage(job, estimate)
+    except QuotaExceeded as exc:
+        _discard_unstarted_job(job)
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     _executor.submit(_worker_tts_text, job, req)
     return {"job_id": job.id}
 
 
 @app.post("/dub")
-async def dub(req: DubRequest, user: User = Depends(_current_user)) -> dict[str, str]:
+async def dub(
+    req: DubRequest,
+    request: Request,
+    user: User = Depends(_current_user),
+) -> dict[str, str]:
+    _enforce_rate_limit(request, "dub", limit=60, window=3600)
+    if not req.segments or len(req.segments) > 5000:
+        raise HTTPException(status_code=400, detail="Nieprawidłowa liczba segmentów dubbingu")
     if req.transcribe_job_id:
         _require_job(req.transcribe_job_id, user)
-    owner_id = _CUSTOM_SPEAKER_OWNER.get(req.speaker_label)
-    if owner_id is not None and owner_id != user.id:
-        raise HTTPException(status_code=404, detail="Speaker not found")
+    if req.reuse_dub_job_id:
+        prior_job = _require_job(req.reuse_dub_job_id, user)
+        if prior_job.kind != "dub" or prior_job.status != "done":
+            raise HTTPException(status_code=409, detail="Poprzedni dubbing nie jest gotowy")
+    requested_speakers = {req.speaker_label}
+    requested_speakers.update(
+        str(segment.get("speaker_label"))
+        for segment in req.segments
+        if segment.get("speaker_label")
+    )
+    for requested_speaker in requested_speakers:
+        if requested_speaker not in _SPEAKER_ID_BY_LABEL and requested_speaker not in _SPEAKER_MEL:
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        owner_id = _CUSTOM_SPEAKER_OWNER.get(requested_speaker)
+        if owner_id is not None and owner_id != user.id:
+            raise HTTPException(status_code=404, detail="Speaker not found")
     job = _new_job(user, "dub")
+    timeline_seconds = max((float(segment.get("end", 0.0)) for segment in req.segments), default=0.0)
+    estimated_generation = _estimate_dub_generation_seconds(req, timeline_seconds)
+    estimate = max(1, int(estimated_generation + 0.999))
+    try:
+        _reserve_job_usage(job, estimate)
+    except QuotaExceeded as exc:
+        _discard_unstarted_job(job)
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     _executor.submit(_worker_dub, job, req)
     return {"job_id": job.id}
 
@@ -2285,7 +2866,10 @@ async def job_audio(job_id: str, user: User = Depends(_current_user)) -> Streami
     return StreamingResponse(
         open(audio_path, "rb"),
         media_type="audio/wav",
-        headers={"Content-Disposition": f'attachment; filename="tts_{job_id}.wav"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="nupicai_ai_voice_{job_id}.wav"',
+            "X-AI-Generated-Content": "true",
+        },
     )
 
 
@@ -2300,7 +2884,10 @@ async def job_mix_audio(job_id: str, user: User = Depends(_current_user)) -> Str
     return StreamingResponse(
         open(audio_path, "rb"),
         media_type="audio/wav",
-        headers={"Content-Disposition": f'attachment; filename="mix_{job_id}.wav"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="nupicai_ai_dubbing_{job_id}.wav"',
+            "X-AI-Generated-Content": "true",
+        },
     )
 
 
@@ -2348,7 +2935,10 @@ async def mix_video(
     return StreamingResponse(
         open(out_mp4, "rb"),
         media_type="video/mp4",
-        headers={"Content-Disposition": 'attachment; filename="dubbed_video.mp4"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="nupicai_ai_dubbed_video.mp4"',
+            "X-AI-Generated-Content": "true",
+        },
     )
 
 
@@ -2382,6 +2972,8 @@ if UI_OUT.exists():
             '<?xml version="1.0" encoding="UTF-8"?>'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             f'<url><loc>{base}/</loc></url><url><loc>{base}/en</loc></url>'
+            f'<url><loc>{base}/regulamin</loc></url><url><loc>{base}/privacy</loc></url>'
+            f'<url><loc>{base}/en/terms</loc></url><url><loc>{base}/en/privacy</loc></url>'
             '</urlset>'
         )
         return Response(content=body, media_type="application/xml")

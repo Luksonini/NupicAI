@@ -23,6 +23,12 @@ Transkrypcja -> Tlumaczenie -> Dubbing
 
 Wynik poprzedniego etapu pozostaje w pamieci projektu, dlatego przejscie do kolejnej uslugi nie uruchamia ponownie ASR ani tlumaczenia.
 
+Edytor dubbingu pozwala przypisac inny glos do pojedynczej sceny, polaczyc segment z nastepnym, a potem podzielic polaczony tekst w miejscu kursora. Przycisk ponowienia przy segmencie zmienia jego seed i generuje tylko ten fragment. Backend kopiuje niezmienione WAV-y segmentow z poprzedniego renderu, sklada nowa os czasu i nalicza limit za faktycznie wygenerowane ponownie audio, a nie za cala produkcje.
+
+Zmiany tekstu, glosu, podzialu i laczenia segmentow maja historie 100 krokow.
+Przyciski cofania i ponawiania sa w naglowku edytora; poza polami tekstowymi
+dzialaja tez standardowe skroty `Ctrl+Z`, `Ctrl+Shift+Z` i `Ctrl+Y`.
+
 ## Co jest w tym folderze
 
 ```text
@@ -40,6 +46,7 @@ dubbing/
       checkpoints/
         styleenc128_lstm.pt
         mini_dualpath_learnedvoice.pt
+        minidualpath_bins_maskgit_continuity_ep742.pt
       vocos-mel-24khz/
       voice_banks/
         selected_top_voices_current.pt
@@ -83,7 +90,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 cp .env.example .env
-# Edytuj .env: ustaw WEGORZ_ADMIN_TOKEN i NUPIC_API_KEY.
+# Edytuj .env: ustaw NUPIC_API_KEY i NUPICAI_ADMIN_EMAILS.
 python check_production.py
 ./start.sh
 ```
@@ -101,11 +108,20 @@ Jesli aplikacja ma byc dostepna z innych komputerow w sieci:
 ./start.sh
 ```
 
-`start.sh` automatycznie laduje lokalny plik `.env`. `WEGORZ_ADMIN_TOKEN` chroni zakladke Administrator. Bez tej zmiennej backend administracyjny pozostaje zablokowany. `WEGORZ_CORS_ORIGINS` powinno zawierac wylacznie adresy frontendu, ktore maja korzystac z API.
+`start.sh` automatycznie laduje lokalny plik `.env`. Konta wymienione w `NUPICAI_ADMIN_EMAILS` otrzymuja dostep do panelu Administrator oraz nielimitowany rendering. Panel korzysta z tej samej bezpiecznej sesji co pozostala czesc aplikacji. `WEGORZ_CORS_ORIGINS` powinno zawierac wylacznie adresy frontendu, ktore maja korzystac z API.
 
 ## Konta i retencja danych
 
 Publiczna strona startowa prowadzi do rejestracji lub logowania. Konta sa przechowywane w lokalnej bazie `runtime/nupicai.sqlite3` (ignorowanej przez Git). Hasla sa zapisywane jako PBKDF2-SHA256 z osobna losowa sola, a token sesji w bazie wystepuje tylko jako SHA-256. Przegladarka otrzymuje sesje w ciasteczku `HttpOnly` z `SameSite=Lax`.
+
+Odzyskiwanie hasla korzysta z jednorazowego linku wysylanego przez Resend. W bazie znajduje sie tylko SHA-256 tokenu, link domyslnie wygasa po godzinie, a udana zmiana hasla uniewaznia wszystkie dotychczasowe sesje. Skonfiguruj zweryfikowanego nadawce:
+
+```env
+NUPICAI_PUBLIC_URL=https://nupicai.example
+NUPICAI_PASSWORD_RESET_TTL_SECONDS=3600
+RESEND_API_KEY=re_...
+NUPICAI_EMAIL_FROM=NupicAI <noreply@nupicai.example>
+```
 
 Kazde zadanie ma wlasciciela. Pliki trafiaja do osobnej przestrzeni:
 
@@ -113,7 +129,7 @@ Kazde zadanie ma wlasciciela. Pliki trafiaja do osobnej przestrzeni:
 /tmp/parakeet_server/users/<user_id>/jobs/<job_id>/
 ```
 
-Backend sprawdza wlasciciela rowniez przy bezposrednim pobieraniu audio, wideo, zrodla i strumienia SSE. Zakonczone pliki oraz prompty glosowe sa automatycznie usuwane po czasie ustawionym przez `NUPICAI_DATA_RETENTION_HOURS` (domyslnie 24 h). Uzytkownik moze tez natychmiast usunac wszystkie swoje pliki w zakladce `Moje konto`. Rekord konta pozostaje, dopoki nie zostanie wdrozona osobna procedura zamkniecia konta.
+Backend sprawdza wlasciciela rowniez przy bezposrednim pobieraniu audio, wideo, zrodla i strumienia SSE. Zakonczone pliki oraz prompty glosowe sa automatycznie usuwane po czasie ustawionym przez `NUPICAI_DATA_RETENTION_HOURS` (domyslnie 24 h). Uzytkownik moze tez natychmiast usunac pliki albo trwale zamknac konto po ponownym podaniu hasla w zakladce `Moje konto`.
 
 Na serwerze publicznym wymagane jest HTTPS. Za reverse proxy ustaw:
 
@@ -122,6 +138,44 @@ NUPICAI_SECURE_COOKIES=1
 ```
 
 `NUPICAI_SESSION_DAYS` steruje czasem sesji (domyslnie 30 dni). Czyszczenie uruchamia sie przy starcie i nastepnie raz na godzine; aktywne zadania nie sa usuwane.
+
+## Limity generowania
+
+Nowe konto otrzymuje limit ustawiony przez `NUPICAI_FREE_SECONDS` (domyslnie 300 sekund). Limit jest rozliczany za zakonczone audio z dubbingu i studia glosu. Transkrypcja oraz tlumaczenie sa obecnie wlaczone w usluge i nie zuzywaja osobnego salda.
+
+Przed rozpoczeciem renderingu backend atomowo rezerwuje szacowany czas. Chroni to przed przekroczeniem salda przez kilka rownoleglych zadan. Po sukcesie pobierany jest rzeczywisty czas pliku, a po bledzie rezerwacja jest zwalniana. Rezerwacje pozostawione przez przerwany proces sa zwalniane przy ponownym uruchomieniu serwera. Stan konta jest dostepny przez `GET /account/usage` i widoczny w naglowku oraz zakladce `Moje konto`.
+
+Saldo jest przechowywane w sekundach w `runtime/nupicai.sqlite3`. Metoda `AuthStore.add_credits(user_id, seconds)` stanowi punkt integracji dla panelu operatora lub webhooka platnosci. Przed sprzedaza pakietow nalezy podlaczyc dostawce platnosci z idempotentnym identyfikatorem transakcji; sam interfejs platnosci nie jest jeszcze wdrozony.
+
+## Checklista przed platna produkcja
+
+- uruchomic aplikacje za HTTPS i ustawic `NUPICAI_SECURE_COOKIES=1`;
+- podlaczyc platnosci do `AuthStore.add_credits` i zapisywac unikalny identyfikator transakcji;
+- skonfigurowac Resend dla odzyskiwania hasla i dodac potwierdzanie adresu e-mail;
+- zastapic pamieciowy rate limiter wspolnym magazynem (np. Redis), jezeli aplikacja bedzie uruchamiana w wielu procesach;
+- wlaczyc skanowanie antymalware multimediow, jezeli model zagrozen uzasadnia koszt;
+- wdrozyc monitoring bledow, metryki kolejki GPU, alerty oraz kopie bazy poza serwerem;
+- dla wielu procesow lub wielu serwerow przeniesc konta, ledger i kolejke z SQLite/pamieci do PostgreSQL oraz wspolnej kolejki zadan;
+- poddac regulamin i polityke prywatnosci przegladowi prawnemu oraz dodac zasady zakupu, odstapienia i zwrotow przed przyjmowaniem platnosci.
+
+Backend ogranicza liczbe prob logowania i rejestracji, rozmiar uploadu oraz rozszerzenia multimediow. Dodaje CSP, HSTS przy bezpiecznych cookies, `nosniff`, ochrone przed osadzaniem w ramkach i polityke uprawnien. Limity aplikacji nie zastepuja limitow i TLS na reverse proxy.
+
+## Regulamin, prywatnosc i tresci AI
+
+Dokumenty pilota sa dostepne pod `/regulamin`, `/privacy`, `/en/terms` i `/en/privacy`. Rejestracja zapisuje wersje obu dokumentow i czas akceptacji. Przed wlaczeniem platnosci trzeba uzupelnic zasady zakupu, odstapienia i zwrotow oraz zlecic przeglad prawny.
+
+Pobrane audio i wideo syntetyczne ma nazwe wskazujaca na AI i naglowek `X-AI-Generated-Content: true`. Jest to pomocnicze oznaczenie, a nie gwarancja pelnej zgodnosci z wymogiem trwalego, maszynowo czytelnego znakowania. Przed publicznym wdrozeniem trzeba wybrac standard metadanych/proweniencji odpowiedni dla audio.
+
+## Wdrozenie serwerowe
+
+Przyklady dla systemd, Nginx i kopii SQLite sa w `deploy/`. Przed startem uzupelnij `.env`, domene i certyfikat, potem uruchom `python check_production.py` oraz testy.
+
+Na publicznym serwerze ustaw `NUPICAI_PRODUCTION=1` i użyj
+`python check_production.py --strict`. Tryb rygorystyczny kończy się błędem, gdy
+pozostają adresy localhost, niezabezpieczone cookies, luźne hosty/CORS,
+nieskonfigurowana poczta albo frontend zbudowany dla innej domeny. Endpoint
+`/ready` zwraca HTTP 503 do czasu pełnego załadowania ASR i TTS; `/health`
+pozostaje endpointem diagnostycznym.
 
 ## Jezyki i SEO
 
@@ -137,6 +191,36 @@ FastAPI wystawia dynamiczne `/robots.txt` i `/sitemap.xml`, dlatego uwzglednia f
 
 Audio dla ASR i TTS jest przetwarzane lokalnie. Przy zdalnym trybie tlumaczenia tekst segmentow jest wysylany do endpointu skonfigurowanego w panelu administratora. Ta informacja musi pozostac w polityce prywatnosci wdrozenia.
 
+## YouTube i aktualizacja yt-dlp
+
+Downloader wykonuje kontrolowana probe standardowego formatu, a po bledzie ponawia pobieranie zgodnym strumieniem MP4. Rozpoznaje filmy prywatne, ograniczenia geograficzne, wymaganie cookies, problemy sieciowe oraz bledy 403/PO Token. Szczegoly techniczne sa zapisywane w `yt_dlp_attempts.log` w katalogu zadania, bez pokazywania surowego logu uzytkownikowi.
+
+Nie aktualizuj pakietow automatycznie w trakcie zadania HTTP. Przy powtarzalnych bledach YouTube wykonaj kontrolowana aktualizacje w srodowisku aplikacji, test gotowosci i restart:
+
+```bash
+source /srv/nupicai/.venv/bin/activate
+python -m pip install --upgrade "yt-dlp[default]"
+python check_production.py
+sudo systemctl restart nupicai
+```
+
+Dolaczony Deno musi miec wersje co najmniej 2.3. Filmy wymagajace konta konfiguruje sie przez `WEGORZ_YTDLP_COOKIES_FILE` albo `WEGORZ_YTDLP_COOKIES_FROM_BROWSER`. Przy aktywnym wymogu Proof of Origin nalezy wdrozyc utrzymywanego dostawce PO Token i przekazac jego ustawienia przez `WEGORZ_YTDLP_EXTRACTOR_ARGS`; nie nalezy wpisywac recznie tokenu zwiazanego z pojedynczym filmem. Zewnetrzne serwisy typu „YouTube downloader” nie sa fallbackiem produkcyjnym: ujawnialyby adres materialu i nie zapewniaja stabilnego API ani kontroli nad plikiem.
+
+## Płatności ze ZróbEbooka
+
+ZróbEbooka zawiera dzialajace klocki PayU, BTCPay, historie transakcji oraz naliczanie sekund. NupicAI moze wykorzystac te same konta operatorow i podobny interfejs, ale kodu nie nalezy kopiowac bez zmian, ponieważ aplikacje maja inny backend, a stara sciezka tworzenia zamowienia przyjmuje cene i wielkosc pakietu z przegladarki.
+
+Bezpieczna integracja NupicAI musi:
+
+- przyjmowac z frontendu wyłącznie identyfikator pakietu, a cene, walute i liczbe sekund pobierac z serwerowego katalogu;
+- zapisac zamowienie `pending` przed przekierowaniem do operatora;
+- zweryfikowac podpis webhooka na surowym body i dodatkowo porownac kwote, walute oraz identyfikator sprzedawcy;
+- w jednej transakcji SQL zmienic status zamowienia i naliczyc sekundy tylko raz;
+- posiadac unikalny identyfikator operatora, historie platnosci, zwroty i proces uzgadniania brakujacych webhookow;
+- nigdy nie pomijac weryfikacji podpisu BTCPay tylko dlatego, ze sekret nie zostal ustawiony.
+
+Istniejace `AuthStore.add_credits` pozostaje punktem administracyjnym. Webhook platnosci powinien korzystac z osobnej atomowej metody rozliczenia zamowienia, a nie wywolywac jej bezposrednio.
+
 ## Widoki uzytkownika i administratora
 
 Zwykly uzytkownik ma dostep do materialu, tekstu, tlumaczenia, glosu, tempa, miksu i eksportu. Parametry checkpointow, flow, duration, klucz API oraz diagnostyka zadan nie sa wyswietlane w standardowym workflow.
@@ -149,7 +233,7 @@ Zakladka Administrator zawiera:
 - aktywny profil TTS oraz modele zaladowane do pamieci,
 - ostatnie zadania i sciezki logow diagnostycznych.
 
-Klucz API jest zapisywany lokalnie w `admin_config.json` z uprawnieniami `0600`. Plik jest ignorowany przez Git, a frontend otrzymuje tylko zamaskowana koncowke klucza. Zmienna `NUPIC_API_KEY` ma pierwszenstwo przy starcie serwera.
+Klucz API jest zapisywany lokalnie w `runtime/admin_config.json` z uprawnieniami `0600`. Starszy `admin_config.json` jest jednokrotnie migrowany do tego katalogu. Plik jest ignorowany przez Git, a frontend otrzymuje tylko zamaskowana koncowke klucza. Zmienna `NUPIC_API_KEY` ma pierwszenstwo przy starcie serwera.
 
 ## Miks dubbingu
 
@@ -177,9 +261,10 @@ Strona zawiera dwa kompletne profile zarzadzane przez backend:
 ```text
 models/tts/checkpoints/styleenc128_lstm.pt
 models/tts/checkpoints/mini_dualpath_learnedvoice.pt
+models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt
 ```
 
-`styleenc128_lstm` jest profilem domyslnym. Wybor technicznego profilu nie jest pokazywany zwyklemu uzytkownikowi. Oba checkpointy zawieraja potrzebne wagi enkodera lub tablic learned voice; runtime nie pobiera ich z katalogu treningowego.
+Domyslny profil wybiera administrator. `maskgit_continuity` zawiera TDA-MaskGIT duration, stan rytmu i pamiec akustyczna poprzedniego chunku. Checkpointy zawieraja potrzebne wagi enkodera lub tablic learned voice; runtime nie pobiera ich z katalogu treningowego.
 Mapa `tts/learned_voice_speaker_map.json` odwzorowuje surowe ID z banku glosow na wiersze tablicy learned voice, dlatego manifest treningowy nie jest potrzebny na produkcji.
 
 Architektura modelu jest w:
@@ -219,6 +304,7 @@ Minimalny zestaw do przeniesienia:
 tts/
 models/tts/checkpoints/styleenc128_lstm.pt
 models/tts/checkpoints/mini_dualpath_learnedvoice.pt
+models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt
 models/tts/vocos-mel-24khz/
 models/tts/voice_banks/selected_top_voices_current.pt
 ```

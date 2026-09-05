@@ -1,10 +1,20 @@
-import type { AdminSettings, JobEvent, Speaker, DubParams, TTSModelProfile, User } from './types';
+import type { AdminSettings, JobEvent, Speaker, DubParams, TTSFlowDefaults, TTSModelProfile, Usage, User } from './types';
 
 const BASE = '';
 
-async function apiError(res: Response): Promise<Error> {
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
+async function apiError(res: Response): Promise<ApiRequestError> {
   const body = await res.json().catch(() => ({ detail: res.statusText }));
-  return new Error(String(body.detail ?? res.statusText));
+  return new ApiRequestError(String(body.detail ?? res.statusText), res.status);
 }
 
 export async function currentUser(): Promise<User | null> {
@@ -34,6 +44,24 @@ export async function loginAccount(email: string, password: string): Promise<Use
   return (await res.json() as { user: User }).user;
 }
 
+export async function requestPasswordReset(email: string): Promise<string> {
+  const res = await fetch(`${BASE}/auth/forgot-password`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) throw await apiError(res);
+  return String((await res.json() as { message?: string }).message ?? '');
+}
+
+export async function resetPassword(token: string, password: string): Promise<string> {
+  const res = await fetch(`${BASE}/auth/reset-password`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  });
+  if (!res.ok) throw await apiError(res);
+  return String((await res.json() as { message?: string }).message ?? '');
+}
+
 export async function logoutAccount(): Promise<void> {
   const res = await fetch(`${BASE}/auth/logout`, { method: 'POST', credentials: 'same-origin' });
   if (!res.ok) throw await apiError(res);
@@ -43,6 +71,20 @@ export async function deleteMyFiles(): Promise<{ removed_bytes: number }> {
   const res = await fetch(`${BASE}/account/files`, { method: 'DELETE', credentials: 'same-origin' });
   if (!res.ok) throw await apiError(res);
   return await res.json() as { removed_bytes: number };
+}
+
+export async function deleteMyAccount(password: string): Promise<void> {
+  const res = await fetch(`${BASE}/account`, {
+    method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) throw await apiError(res);
+}
+
+export async function accountUsage(): Promise<Usage> {
+  const res = await fetch(`${BASE}/account/usage`, { credentials: 'same-origin' });
+  if (!res.ok) throw await apiError(res);
+  return (await res.json() as { usage: Usage }).usage;
 }
 
 export async function uploadAndTranscribe(file: File): Promise<string> {
@@ -104,14 +146,19 @@ export async function listSpeakers(): Promise<Speaker[]> {
   return (data.speakers ?? []) as Speaker[];
 }
 
-export async function listTTSModels(): Promise<{ default: string; active: string; models: TTSModelProfile[] }> {
+export async function listTTSModels(): Promise<{ default: string; active: string; models: TTSModelProfile[]; flow_defaults: TTSFlowDefaults }> {
   const res = await fetch(`${BASE}/tts_models`);
-  if (!res.ok) return { default: '', active: '', models: [] };
+  if (!res.ok) return { default: '', active: '', models: [], flow_defaults: { mel_steps_first: 8, mel_steps_second: 3, mel_twopass_t_noise: 0.12 } };
   const data = await res.json();
   return {
     default: String(data.default ?? ''),
     active: String(data.active ?? ''),
     models: (data.models ?? []) as TTSModelProfile[],
+    flow_defaults: {
+      mel_steps_first: Number(data.flow_defaults?.mel_steps_first ?? 8),
+      mel_steps_second: Number(data.flow_defaults?.mel_steps_second ?? 3),
+      mel_twopass_t_noise: Number(data.flow_defaults?.mel_twopass_t_noise ?? 0.12),
+    },
   };
 }
 
@@ -135,12 +182,18 @@ export async function submitDub(params: DubParams): Promise<string> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? res.statusText);
-  }
+  if (!res.ok) throw await apiError(res);
   const data = await res.json();
   return data.job_id as string;
+}
+
+export async function submitTextTTS(params: Record<string, unknown>): Promise<string> {
+  const res = await fetch(`${BASE}/tts_text`, {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw await apiError(res);
+  return (await res.json() as { job_id: string }).job_id;
 }
 
 export function dubAudioUrl(jobId: string): string {
@@ -178,26 +231,20 @@ export function streamJob(
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(`${BASE}/ready`, { signal: AbortSignal.timeout(3000) });
     return res.ok;
   } catch {
     return false;
   }
 }
 
-export async function getAdminSettings(token: string): Promise<AdminSettings> {
-  const res = await fetch(`${BASE}/admin/settings`, {
-    headers: { 'X-Admin-Token': token },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? res.statusText);
-  }
+export async function getAdminSettings(): Promise<AdminSettings> {
+  const res = await fetch(`${BASE}/admin/settings`, { credentials: 'same-origin' });
+  if (!res.ok) throw await apiError(res);
   return await res.json() as AdminSettings;
 }
 
 export async function saveAdminSettings(
-  token: string,
   settings: {
     translation_endpoint: string;
     translation_model: string;
@@ -205,16 +252,17 @@ export async function saveAdminSettings(
     translation_batch_segments: number;
     translation_api_key: string;
     clear_translation_api_key: boolean;
+    tts_profile: string;
+    mel_steps_first: number;
+    mel_steps_second: number;
+    mel_twopass_t_noise: number;
   },
 ): Promise<AdminSettings> {
   const res = await fetch(`${BASE}/admin/settings`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? res.statusText);
-  }
+  if (!res.ok) throw await apiError(res);
   return await res.json() as AdminSettings;
 }

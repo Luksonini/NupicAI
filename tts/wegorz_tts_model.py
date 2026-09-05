@@ -422,6 +422,289 @@ class MiniDualPathDurationPredictor(nn.Module):
         return pred, None
 
 
+class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
+    """Total-duration-aware categorical MiniDualPath with parallel MaskGIT decoding."""
+
+    is_tda_maskgit = True
+
+    def __init__(
+        self,
+        dim: int,
+        *,
+        layers: int = 3,
+        attn_dim: int = 128,
+        conv_dim: int = 128,
+        heads: int = 4,
+        dropout: float = 0.1,
+        style_dim: int = 128,
+        max_dur_bins: int = 100,
+        iterations: int = 8,
+        mask_ratio_min: float = 0.30,
+        mask_ratio_max: float = 1.0,
+        all_mask_prob: float = 0.20,
+        budget_loss_weight: float = 0.20,
+        total_head_weight: float = 0.05,
+        budget_mode: str = "predicted",
+        mask_schedule: str = "cosine",
+        min_token_frames: int = 1,
+        min_pause_frames: int = 1,
+        rhythm_dim: int = 6,
+        rhythm_gate_init: float = 0.02,
+    ):
+        super().__init__()
+        self.max_bin = int(max_dur_bins)
+        self.mask_class = self.max_bin + 1
+        self.iterations = int(iterations)
+        self.mask_ratio_min = float(mask_ratio_min)
+        self.mask_ratio_max = float(mask_ratio_max)
+        self.all_mask_prob = float(all_mask_prob)
+        self.budget_loss_weight = float(budget_loss_weight)
+        self.total_head_weight = float(total_head_weight)
+        self.budget_mode = str(budget_mode).lower().strip()
+        self.mask_schedule = str(mask_schedule).lower().strip()
+        self.min_token_frames = max(0, int(min_token_frames))
+        self.min_pause_frames = max(0, int(min_pause_frames))
+
+        self.style_proj = nn.Linear(int(style_dim), int(dim)) if int(style_dim) > 0 else None
+        self.style_gate = nn.Parameter(torch.tensor(0.01))
+        if self.style_proj is not None:
+            nn.init.xavier_uniform_(self.style_proj.weight, gain=0.01)
+            nn.init.zeros_(self.style_proj.bias)
+        self.rhythm_norm = nn.LayerNorm(int(rhythm_dim))
+        self.rhythm_mlp = nn.Sequential(
+            nn.Linear(int(rhythm_dim), 64),
+            nn.SiLU(),
+            nn.Linear(64, int(dim)),
+        )
+        self.rhythm_gate = nn.Parameter(torch.tensor(float(rhythm_gate_init)))
+        self.duration_embed = nn.Embedding(self.max_bin + 2, int(dim))
+        self.budget_mlp = nn.Sequential(nn.Linear(2, int(dim)), nn.SiLU(), nn.Linear(int(dim), int(dim)))
+        self.blocks = nn.ModuleList([
+            MiniDualPathDurationBlock(
+                int(dim), attn_dim=int(attn_dim), conv_dim=int(conv_dim),
+                heads=int(heads), dropout=float(dropout),
+            )
+            for _ in range(int(layers))
+        ])
+        self.out_norm = nn.LayerNorm(int(dim))
+        self.head = nn.Linear(int(dim), self.max_bin + 1)
+        half = max(32, int(dim) // 2)
+        self.total_head = nn.Sequential(nn.Linear(int(dim), half), nn.SiLU(), nn.Linear(half, 1))
+        self.last_infer_stats: Dict[str, float] = {}
+
+    def _base(
+        self,
+        x_tok: torch.Tensor,
+        x_mask: torch.Tensor,
+        style_vec: Optional[torch.Tensor],
+        rhythm_state: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        x = x_tok.float() * x_mask.transpose(1, 2).float()
+        if self.style_proj is not None and style_vec is not None:
+            style = self.style_proj(style_vec.to(device=x.device, dtype=x.dtype))[:, None]
+            x = x + self.style_gate.to(dtype=x.dtype) * style
+        if rhythm_state is not None:
+            rhythm = rhythm_state.to(device=x.device, dtype=x.dtype)
+            available = rhythm[:, -1:].clamp(0.0, 1.0)
+            rhythm = (self.rhythm_mlp(self.rhythm_norm(rhythm)) * available)[:, None]
+            x = x + self.rhythm_gate.to(dtype=x.dtype) * rhythm
+        return x
+
+    def _predict_total(self, base: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        per_token = F.softplus(self.total_head(base).squeeze(-1)) * valid.float()
+        total = per_token.sum(1).clamp_min(1.0)
+        minimum = valid.sum(1).float()
+        maximum = minimum * float(self.max_bin)
+        return torch.maximum(total, minimum).minimum(maximum.clamp_min(minimum))
+
+    def _logits(
+        self,
+        base: torch.Tensor,
+        x_mask: torch.Tensor,
+        observed: torch.Tensor,
+        total: torch.Tensor,
+    ) -> torch.Tensor:
+        valid = x_mask.squeeze(1).bool()
+        known = valid & (observed != self.mask_class)
+        known_sum = torch.where(known, observed.float(), torch.zeros_like(observed, dtype=torch.float32)).sum(1)
+        remaining = (total.float() - known_sum).clamp_min(0.0)
+        budget = torch.stack([torch.log1p(total.float()), torch.log1p(remaining)], dim=-1)
+        h = base + self.duration_embed(observed.clamp(0, self.mask_class))
+        h = h + self.budget_mlp(budget)[:, None]
+        for block in self.blocks:
+            h = block(h, x_mask)
+        return self.head(self.out_norm(h))
+
+    @staticmethod
+    def _largest_remainder(values: torch.Tensor, total: int, floors: torch.Tensor) -> torch.Tensor:
+        values = values.float().clamp_min(0.0)
+        floors = floors.long().clamp_min(0)
+        total = max(int(total), int(floors.sum().item()))
+        available = int(total - int(floors.sum().item()))
+        if available <= 0:
+            return floors
+        weights = (values - floors.float()).clamp_min(0.0)
+        if float(weights.sum().item()) <= 1e-8:
+            weights = torch.ones_like(values)
+        scaled_extra = weights * (float(available) / weights.sum().clamp_min(1e-8))
+        extra = torch.floor(scaled_extra).long()
+        remainder = int(available - int(extra.sum().item()))
+        if remainder > 0:
+            frac = scaled_extra - extra.float()
+            chosen = torch.topk(frac, k=min(remainder, int(frac.numel()))).indices
+            extra[chosen] += 1
+        return floors + extra
+
+    def _normalize_pending(
+        self,
+        values: torch.Tensor,
+        token_ids: Optional[torch.Tensor],
+        pending: torch.Tensor,
+        remaining_total: int,
+    ) -> torch.Tensor:
+        indices = torch.nonzero(pending, as_tuple=False).flatten()
+        if indices.numel() == 0:
+            return values.new_zeros(values.shape, dtype=torch.long)
+        floors = torch.full(
+            (int(indices.numel()),), self.min_token_frames,
+            device=values.device, dtype=torch.long,
+        )
+        if token_ids is not None:
+            is_pause = token_ids[indices] == int(SYMBOL2ID.get("<sp>", -999999))
+            floors = torch.where(is_pause, torch.full_like(floors, self.min_pause_frames), floors)
+        normalized = self._largest_remainder(values[indices], int(remaining_total), floors)
+        out = values.new_zeros(values.shape, dtype=torch.long)
+        out[indices] = normalized
+        return out
+
+    def _maskgit_take_count(self, pending_count: int, step: int) -> int:
+        if step >= self.iterations - 1:
+            return int(pending_count)
+        if self.mask_schedule != "cosine":
+            return max(1, int(math.ceil(float(pending_count) / float(max(1, self.iterations - step)))))
+        previous_fraction = 1.0 - math.cos(0.5 * math.pi * float(step) / float(self.iterations))
+        next_fraction = 1.0 - math.cos(0.5 * math.pi * float(step + 1) / float(self.iterations))
+        conditional_fraction = (next_fraction - previous_fraction) / max(1e-8, 1.0 - previous_fraction)
+        return max(1, min(int(pending_count), int(math.ceil(conditional_fraction * pending_count))))
+
+    @staticmethod
+    def _fit_budget(
+        values: torch.Tensor,
+        confidence: torch.Tensor,
+        token_ids: Optional[torch.Tensor],
+        valid: torch.Tensor,
+        total: int,
+    ) -> torch.Tensor:
+        out = values.round().long().clamp_min(0)
+        diff = int(total - int(out[valid].sum()))
+        pause_idx = (
+            torch.nonzero(valid & (token_ids == int(SYMBOL2ID.get("<sp>", -999999))), as_tuple=False)
+            .flatten().tolist()
+            if token_ids is not None else []
+        )
+        fallback = torch.nonzero(valid, as_tuple=False).flatten().tolist()
+        if not fallback:
+            return out.float()
+        if diff > 0:
+            targets = pause_idx or sorted(fallback, key=lambda i: float(confidence[i]))
+            for step in range(diff):
+                out[targets[step % len(targets)]] += 1
+        elif diff < 0:
+            need = -diff
+            order = pause_idx + [i for i in sorted(fallback, key=lambda i: float(confidence[i])) if i not in pause_idx]
+            for index in order:
+                floor = 0 if index in pause_idx else 1
+                take = min(need, max(0, int(out[index]) - floor))
+                out[index] -= take
+                need -= take
+                if need <= 0:
+                    break
+        return out.float()
+
+    @torch.no_grad()
+    def predict_durations(
+        self,
+        x_tok: torch.Tensor,
+        x_mask: torch.Tensor,
+        *,
+        token_ids: Optional[torch.Tensor] = None,
+        style_vec: Optional[torch.Tensor] = None,
+        total_hint: Optional[torch.Tensor] = None,
+        rhythm_state: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        valid = x_mask.squeeze(1).bool()
+        base = self._base(x_tok, x_mask, style_vec, rhythm_state)
+        if self.budget_mode == "external" and total_hint is None:
+            raise ValueError("duration budget mode 'external' requires total_hint")
+        total_float = self._predict_total(base, valid) if total_hint is None else total_hint.float()
+        total = total_float.round().long().clamp_min(1)
+        minimum_total = valid.sum(1).long() * self.min_token_frames
+        if token_ids is not None and self.min_pause_frames != self.min_token_frames:
+            pause_count = (valid & (token_ids == int(SYMBOL2ID.get("<sp>", -999999)))).sum(1).long()
+            minimum_total += pause_count * int(self.min_pause_frames - self.min_token_frames)
+        total = torch.maximum(total, minimum_total.clamp_min(1))
+        observed = torch.full(valid.shape, self.mask_class, device=x_tok.device, dtype=torch.long)
+        observed[~valid] = 0
+        confidence = torch.zeros(valid.shape, device=x_tok.device)
+        sampled = torch.zeros(valid.shape, device=x_tok.device, dtype=torch.long)
+        for step in range(self.iterations):
+            probs = torch.softmax(self._logits(base, x_mask, observed, total).float(), dim=-1)
+            conf, pred = probs.max(dim=-1)
+            for b in range(int(valid.size(0))):
+                pending = torch.nonzero(valid[b] & (observed[b] == self.mask_class), as_tuple=False).flatten()
+                if pending.numel() == 0:
+                    continue
+                sampled[b, pending] = pred[b, pending]
+                candidates = pred[b].long()
+                if self.budget_mode in {"predicted", "external"}:
+                    known = valid[b] & (observed[b] != self.mask_class)
+                    remaining_total = max(0, int(total[b]) - int(observed[b, known].sum()))
+                    candidates = self._normalize_pending(
+                        candidates.float(), token_ids[b] if token_ids is not None else None,
+                        valid[b] & (observed[b] == self.mask_class), remaining_total,
+                    )
+                take = self._maskgit_take_count(int(pending.numel()), step)
+                chosen = pending[torch.topk(conf[b, pending], k=min(take, int(pending.numel()))).indices]
+                observed[b, chosen] = candidates[chosen]
+                confidence[b, chosen] = conf[b, chosen]
+        decoded = observed.clamp_min(0).float() * valid.float()
+        raw = sampled.clamp(0, self.max_bin).float() * valid.float()
+        if self.budget_mode == "legacy":
+            decoded = raw.clone()
+            for b in range(int(valid.size(0))):
+                decoded[b] = self._fit_budget(
+                    decoded[b], confidence[b], token_ids[b] if token_ids is not None else None,
+                    valid[b], int(total[b]),
+                )
+        elif self.budget_mode == "natural":
+            decoded = raw
+        self.last_infer_stats = {
+            "pred_total": float(total_float.mean()),
+            "raw_ratio": float((raw.sum(1) / total.float().clamp_min(1.0)).mean()),
+            "budget_fix": float((decoded - raw).abs().sum(1).mean()),
+            "final_ratio": float((decoded.sum(1) / total.float().clamp_min(1.0)).mean()),
+        }
+        return decoded * valid.float()
+
+    def predict_logdur(
+        self,
+        x_tok: torch.Tensor,
+        x_mask: torch.Tensor,
+        initial_hc: "tuple | None" = None,
+        style_vec: Optional[torch.Tensor] = None,
+        rhythm_state: Optional[torch.Tensor] = None,
+        token_ids: Optional[torch.Tensor] = None,
+    ) -> "tuple[torch.Tensor, None]":
+        del initial_hc
+        durations = self.predict_durations(
+            x_tok, x_mask, token_ids=token_ids, style_vec=style_vec, rhythm_state=rhythm_state,
+        )
+        return torch.log1p(durations), None
+
+
+MiniDualPathBinsGPTDurationPredictor = MiniDualPathBinsMaskGITDurationPredictor
+
+
 def _ensure_duration_style_adapter_live(module: nn.Module, *, gate_value: float = 0.01, gain: float = 0.01) -> bool:
     proj = getattr(module, "style_proj", None)
     gate = getattr(module, "style_gate", None)
@@ -1405,6 +1688,152 @@ class ContextBridgeCache:
                 self._prev_mask[key] = torch.ones((1, h_curr.size(1)), dtype=torch.bool)
             self._last_chunk[key] = int(ci)
 
+class DurationRhythmCache:
+    """Detached duration summary for the previous consecutive chunk."""
+
+    feature_dim = 6
+
+    def __init__(self):
+        self._state: Dict[Tuple[int, int], torch.Tensor] = {}
+        self._last_chunk: Dict[Tuple[int, int], int] = {}
+
+    def clear(self) -> None:
+        self._state.clear()
+        self._last_chunk.clear()
+
+    def get_batch(self, *, speaker_ids, book_ids, chunk_idx, device, dtype=torch.float32):
+        rows = []
+        for sid, bid, ci in zip(
+            speaker_ids.detach().cpu().tolist(), book_ids.detach().cpu().tolist(),
+            chunk_idx.detach().cpu().tolist(),
+        ):
+            key = (int(sid), int(bid))
+            previous = self._state.get(key)
+            consecutive = int(ci) > 0 and self._last_chunk.get(key) == int(ci) - 1
+            rows.append(previous.clone() if previous is not None and consecutive else torch.zeros(self.feature_dim))
+        return torch.stack(rows).to(device=device, dtype=dtype)
+
+    @staticmethod
+    def summarize(durations: torch.Tensor, token_ids: torch.Tensor) -> torch.Tensor:
+        durations = durations.detach().float().clamp_min(0.0)
+        token_ids = token_ids.detach().long()
+        valid = (token_ids != int(PAD_ID)) & (durations > 0.0)
+        pause = valid & (token_ids == int(SYMBOL2ID.get("<sp>", -999999)))
+        speech = valid & ~pause
+        valid_f, pause_f, speech_f = valid.float(), pause.float(), speech.float()
+        total = (durations * valid_f).sum(1)
+        pause_total = (durations * pause_f).sum(1)
+        speech_mean = (durations * speech_f).sum(1) / speech_f.sum(1).clamp_min(1.0)
+        pause_mean = pause_total / pause_f.sum(1).clamp_min(1.0)
+        frames_per_token = total / valid_f.sum(1).clamp_min(1.0)
+        pause_fraction = pause_total / total.clamp_min(1.0)
+        final_pause = torch.zeros_like(total)
+        for b in range(int(durations.size(0))):
+            indices = torch.nonzero(pause[b], as_tuple=False).flatten()
+            if indices.numel() > 0:
+                final_pause[b] = durations[b, indices[-1]]
+        return torch.stack([
+            torch.log1p(speech_mean), torch.log1p(pause_mean), pause_fraction,
+            torch.log1p(frames_per_token), torch.log1p(final_pause), torch.ones_like(total),
+        ], dim=-1)
+
+    def set_batch(self, *, speaker_ids, book_ids, chunk_idx, durations, token_ids) -> None:
+        summaries = self.summarize(durations, token_ids).cpu()
+        for i, (sid, bid, ci) in enumerate(zip(
+            speaker_ids.detach().cpu().tolist(), book_ids.detach().cpu().tolist(),
+            chunk_idx.detach().cpu().tolist(),
+        )):
+            key = (int(sid), int(bid))
+            self._state[key] = summaries[i].clone()
+            self._last_chunk[key] = int(ci)
+
+
+class AcousticMemoryCache:
+    """Detached mel tail for the previous consecutive chunk."""
+
+    def __init__(self, max_frames: int):
+        self.max_frames = max(1, int(max_frames))
+        self._tails: Dict[Tuple[int, int], torch.Tensor] = {}
+        self._last_chunk: Dict[Tuple[int, int], int] = {}
+
+    def clear(self) -> None:
+        self._tails.clear()
+        self._last_chunk.clear()
+
+    def get_batch(self, *, speaker_ids, book_ids, chunk_idx, n_mels, device, dtype):
+        sids = speaker_ids.detach().cpu().tolist()
+        bids = book_ids.detach().cpu().tolist()
+        chunks = chunk_idx.detach().cpu().tolist()
+        batch = torch.zeros(len(sids), int(n_mels), self.max_frames)
+        lengths = torch.zeros(len(sids), dtype=torch.long)
+        available = torch.zeros(len(sids))
+        for i, (sid, bid, ci) in enumerate(zip(sids, bids, chunks)):
+            key = (int(sid), int(bid))
+            tail = self._tails.get(key)
+            if tail is None or not (int(ci) > 0 and self._last_chunk.get(key) == int(ci) - 1):
+                continue
+            length = min(self.max_frames, int(tail.size(-1)))
+            batch[i, :, -length:] = tail[0, :, -length:].float()
+            lengths[i] = length
+            available[i] = 1.0
+        return batch.to(device=device, dtype=dtype), lengths.to(device=device), available.to(device=device, dtype=dtype)
+
+    def set_batch(self, *, speaker_ids, book_ids, chunk_idx, mel_bct, frame_lengths) -> None:
+        mel_cpu = mel_bct.detach().cpu().float()
+        lengths = frame_lengths.detach().cpu().long().tolist()
+        for i, (sid, bid, ci, length) in enumerate(zip(
+            speaker_ids.detach().cpu().tolist(), book_ids.detach().cpu().tolist(),
+            chunk_idx.detach().cpu().tolist(), lengths,
+        )):
+            key = (int(sid), int(bid))
+            length = max(1, min(int(length), int(mel_cpu.size(-1))))
+            self._tails[key] = mel_cpu[i:i + 1, :, max(0, length - self.max_frames):length].contiguous()
+            self._last_chunk[key] = int(ci)
+
+
+class PreviousAcousticMemoryEncoder(nn.Module):
+    """Compress a previous mel tail into the checkpoint's attribute-prefix token."""
+
+    def __init__(self, *, n_mels: int, hidden_dim: int, gate_init: float = 0.01, gate_max: float = 0.05):
+        super().__init__()
+        self.gate_max = float(max(1e-4, gate_max))
+        ratio = min(1.0 - 1e-5, max(1e-5, float(gate_init) / self.gate_max))
+        self.raw_gate = nn.Parameter(torch.tensor(math.log(ratio / (1.0 - ratio))))
+        self.convs = nn.ModuleList([
+            nn.Conv1d(int(n_mels), 128, 5, stride=2, padding=2),
+            nn.Conv1d(128, 128, 5, stride=2, padding=2, groups=128),
+            nn.Conv1d(128, 128, 5, stride=2, padding=2, groups=128),
+        ])
+        self.pointwise = nn.ModuleList([nn.Identity(), nn.Conv1d(128, 128, 1), nn.Conv1d(128, 128, 1)])
+        self.norms = nn.ModuleList([nn.GroupNorm(8, 128) for _ in range(3)])
+        self.attn_score = nn.Conv1d(128, 1, 1)
+        self.out = nn.Linear(256, int(hidden_dim))
+        self.out_norm = nn.LayerNorm(int(hidden_dim))
+
+    def forward(self, mel_bct, lengths, available, *, dropout_prob=0.0, noise_std=0.0):
+        x = mel_bct.float()
+        reduced_lengths = lengths.long()
+        for conv, pointwise, norm in zip(self.convs, self.pointwise, self.norms):
+            x = F.silu(norm(pointwise(conv(x))))
+            reduced_lengths = torch.div(reduced_lengths + 1, 2, rounding_mode="floor")
+        time = int(x.size(-1))
+        positions = torch.arange(time, device=x.device)[None]
+        valid = positions >= (time - reduced_lengths.clamp(0, time))[:, None]
+        weights = torch.softmax(self.attn_score(x).squeeze(1).masked_fill(~valid, -1e4), dim=-1) * valid.float()
+        weights = weights / weights.sum(1, keepdim=True).clamp_min(1e-8)
+        mean = torch.einsum("bt,bct->bc", weights, x)
+        variance = torch.einsum("bt,bct->bc", weights, (x - mean[:, :, None]).square())
+        token = self.out_norm(self.out(torch.cat([mean, variance.clamp_min(1e-8).sqrt()], dim=-1)))
+        token = torch.nan_to_num(3.0 * torch.tanh(token / 3.0), nan=0.0, posinf=3.0, neginf=-3.0)
+        return token * available.float()[:, None]
+
+    @staticmethod
+    def replace_prefix_token(base: torch.Tensor, token: torch.Tensor) -> torch.Tensor:
+        token = token.to(device=base.device, dtype=base.dtype)
+        active = token.detach().abs().amax(dim=-1, keepdim=True) > 0
+        return torch.where(active, token, base)
+
+
 class ContextBridge(nn.Module):
     """
     Context bridge with:
@@ -1484,6 +1913,7 @@ def encode_text_features_stateful(
     spk_vec_override: Optional[torch.Tensor] = None,  # [B,D_text]
     require_spk_override: bool = True,
     use_emotion_token: bool = False,
+    attribute_token_override: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
     """
     Stateful wariant encode_text_features (prefix tokens: speaker + attribute/emotion + mem):
@@ -1534,6 +1964,10 @@ def encode_text_features_stateful(
     if int(special_len) >= 3:
         mem_tok = bridge.mem_to_text(state_before.mem).to(dtype=x.dtype, device=x.device)  # [B,D]
         x[:, 2, :] = mem_tok
+    if attribute_token_override is not None:
+        if int(special_len) < 2:
+            raise RuntimeError("Acoustic memory requires attribute prefix slot [1].")
+        x[:, 1, :] = attribute_token_override.to(dtype=x.dtype, device=x.device)
 
     # pozycje + encoder
     pos = getattr(model, "pos", None)
@@ -2860,11 +3294,19 @@ def _predict_dur_prior_direct(
     dur_prior_sigma_min: float = 0.1,
     initial_hc: "tuple | None" = None,
     style_vec: Optional[torch.Tensor] = None,
+    rhythm_state: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     ids_full = F.pad(tok_pad, (int(special_len), 0), value=PAD_ID)
     dur_allowed = _build_dur_allowed_mask(ids_full, special_len)
     x_mask = dur_allowed.float().unsqueeze(1)
-    if hasattr(model.dur, "predict_logdur"):
+    if hasattr(model.dur, "predict_durations"):
+        dur_pred = model.dur.predict_durations(  # type: ignore[attr-defined]
+            x_tok.float(), x_mask.float(), token_ids=ids_full,
+            style_vec=style_vec, rhythm_state=rhythm_state,
+        )
+        dur_logits = torch.log1p(dur_pred.clamp_min(0.0))
+        _predict_dur_prior_direct._last_hc = None
+    elif hasattr(model.dur, "predict_logdur"):
         dur_logits, _final_hc = model.dur.predict_logdur(  # type: ignore[attr-defined]
             x_tok.float(),
             x_mask.float(),

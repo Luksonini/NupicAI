@@ -7,6 +7,7 @@ admin_config.json
 runtime/
 parakeet-ui/node_modules/
 parakeet-ui/.next/
+parakeet-ui/tsconfig.tsbuildinfo
 translate/outputs/
 *.log
 

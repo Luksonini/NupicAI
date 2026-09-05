@@ -13,6 +13,10 @@ export interface Segment {
   source_text?: string;
   words?: Word[];
   translation?: string;
+  segment_id?: string;
+  speaker_label?: string;
+  seed?: number;
+  render_nonce?: number;
 }
 
 export interface TranscribeResult {
@@ -43,6 +47,8 @@ export interface DubResult {
   transcribe_job_id: string;
   segments?: Array<Record<string, unknown>>;
   debug_log?: string;
+  reused_segments?: number;
+  generated_segments?: number;
   mix?: {
     original_gain: number;
     dubbing_gain: number;
@@ -91,9 +97,21 @@ export interface User {
   display_name: string;
   created_at: number;
   data_retention_hours: number;
+  is_admin: boolean;
+  unlimited_usage: boolean;
+  usage: Usage;
 }
 
-export interface Speaker { label: string; id: number; }
+export interface Usage {
+  plan: string;
+  total_seconds: number;
+  used_seconds: number;
+  reserved_seconds: number;
+  available_seconds: number;
+  unlimited: boolean;
+}
+
+export interface Speaker { label: string; display_name?: string; id: number; }
 
 export interface TTSModelProfile {
   key: string;
@@ -102,6 +120,13 @@ export interface TTSModelProfile {
   checkpoint: string;
   default: boolean;
   active: boolean;
+  loaded?: boolean;
+}
+
+export interface TTSFlowDefaults {
+  mel_steps_first: number;
+  mel_steps_second: number;
+  mel_twopass_t_noise: number;
 }
 
 export interface DubParams {
@@ -109,6 +134,7 @@ export interface DubParams {
   speaker_label: string;
   tts_model_profile: string;
   transcribe_job_id: string;
+  reuse_dub_job_id?: string;
   target_lang: string;
   base_speed: number;
   max_adaptive_speed: number;
@@ -149,6 +175,11 @@ export interface AdminSettings {
   translation_api_key_configured: boolean;
   translation_api_key_masked: string;
   tts_profile: string;
+  tts_active_profile: string;
+  tts_models: Array<{ key: string; label: string }>;
+  mel_steps_first: number;
+  mel_steps_second: number;
+  mel_twopass_t_noise: number;
   tts_loaded_profiles: string[];
   model_ready: boolean;
   tts_ready: boolean;

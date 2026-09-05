@@ -82,6 +82,10 @@ _spec.loader.exec_module(_vmod)  # type: ignore[union-attr]
 ARDurationTransformer = getattr(_vmod, "ARDurationTransformer", None)
 BiLSTMDurationPredictor = getattr(_vmod, "BiLSTMDurationPredictor", None)
 MiniDualPathDurationPredictor = getattr(_vmod, "MiniDualPathDurationPredictor", None)
+MiniDualPathBinsMaskGITDurationPredictor = getattr(_vmod, "MiniDualPathBinsMaskGITDurationPredictor", None)
+DurationRhythmCache = getattr(_vmod, "DurationRhythmCache", None)
+AcousticMemoryCache = getattr(_vmod, "AcousticMemoryCache", None)
+PreviousAcousticMemoryEncoder = getattr(_vmod, "PreviousAcousticMemoryEncoder", None)
 ProbabilisticPriorDecoder = _vmod.ProbabilisticPriorDecoder
 MelFlowDecoder = _vmod.MelFlowDecoder
 SpeakerlessMelFlowDecoder = _vmod.SpeakerlessMelFlowDecoder
@@ -250,7 +254,32 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
     duration_model = str(ckpt_args.get("duration_model", "bilstm")).lower().strip()
     if duration_model == "ar_transformer":
         duration_model = "lstm_ar"
-    if duration_model == "mini_dualpath":
+    if duration_model == "mini_dualpath_bins_gpt":
+        duration_model = "mini_dualpath_bins_maskgit"
+    if duration_model == "mini_dualpath_bins_maskgit":
+        if MiniDualPathBinsMaskGITDurationPredictor is None:
+            raise RuntimeError("Checkpoint requests MaskGIT duration, but runtime model lacks its predictor.")
+        dur_predictor = MiniDualPathBinsMaskGITDurationPredictor(
+            dim=hidden_dim,
+            layers=int(ckpt_args.get("mini_dur_layers", 3)),
+            attn_dim=int(ckpt_args.get("mini_dur_attn_dim", 128)),
+            conv_dim=int(ckpt_args.get("mini_dur_conv_dim", 128)),
+            heads=int(ckpt_args.get("mini_dur_heads", 4)),
+            dropout=float(ckpt_args.get("mini_dur_dropout", 0.1)),
+            max_dur_bins=int(ckpt_args.get("mini_dur_max_bins", 100)),
+            iterations=int(ckpt_args.get("mini_dur_maskgit_iterations", 8)),
+            mask_ratio_min=float(ckpt_args.get("mini_dur_mask_ratio_min", 0.30)),
+            mask_ratio_max=float(ckpt_args.get("mini_dur_mask_ratio_max", 1.0)),
+            all_mask_prob=float(ckpt_args.get("mini_dur_all_mask_prob", 0.20)),
+            budget_loss_weight=float(ckpt_args.get("mini_dur_budget_loss_weight", 0.20)),
+            total_head_weight=float(ckpt_args.get("mini_dur_total_head_weight", 0.05)),
+            budget_mode=str(ckpt_args.get("mini_dur_budget_mode", "predicted")),
+            mask_schedule=str(ckpt_args.get("mini_dur_mask_schedule", "cosine")),
+            min_token_frames=int(ckpt_args.get("mini_dur_min_token_frames", 1)),
+            min_pause_frames=int(ckpt_args.get("mini_dur_min_pause_frames", 1)),
+            rhythm_gate_init=float(ckpt_args.get("duration_rhythm_gate_init", 0.02)),
+        ).to(device)
+    elif duration_model == "mini_dualpath":
         if MiniDualPathDurationPredictor is None:
             raise RuntimeError("Checkpoint requests mini_dualpath duration, but runtime model lacks MiniDualPathDurationPredictor.")
         dur_predictor = MiniDualPathDurationPredictor(
@@ -273,6 +302,17 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
             heads=int(ckpt_args.get("ar_dur_heads", 4)),
             ffn_mult=int(ckpt_args.get("ar_dur_ffn_mult", 4)),
             dropout=float(ckpt_args.get("ar_dur_dropout", 0.1)),
+        ).to(device)
+
+    acoustic_memory = None
+    if isinstance(payload.get("acoustic_memory"), dict):
+        if PreviousAcousticMemoryEncoder is None:
+            raise RuntimeError("Checkpoint contains acoustic memory, but runtime model lacks its encoder.")
+        acoustic_memory = PreviousAcousticMemoryEncoder(
+            n_mels=N_MELS,
+            hidden_dim=hidden_dim,
+            gate_init=float(ckpt_args.get("acoustic_memory_gate_init", 0.01)),
+            gate_max=float(ckpt_args.get("acoustic_memory_gate_max", 0.05)),
         ).to(device)
 
     # ---- Mel flow ----
@@ -346,7 +386,10 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
         )
     prior_mu.load_state_dict(payload.get("prior_mu", {}), strict=False)
     mel_flow.load_state_dict(payload.get("mel_flow", {}), strict=False)
-    dur_predictor.load_state_dict(payload.get("dur_predictor", {}), strict=False)
+    dur_predictor.load_state_dict(payload.get("dur_predictor", {}), strict=True)
+    if acoustic_memory is not None:
+        acoustic_memory.load_state_dict(payload["acoustic_memory"], strict=True)
+        print("[daemon] Loaded previous acoustic memory", file=sys.stderr, flush=True)
     if speaker_encoder is not None and "speaker_encoder" in payload and payload.get("speaker_encoder") is not None:
         speaker_encoder.load_state_dict(payload["speaker_encoder"], strict=False)
         print("[daemon] Loaded speaker_encoder from checkpoint", file=sys.stderr, flush=True)
@@ -369,6 +412,8 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
         eval_modules.append(learned_spk_table)
     if learned_style_table is not None:
         eval_modules.append(learned_style_table)
+    if acoustic_memory is not None:
+        eval_modules.append(acoustic_memory)
     for m in eval_modules:
         m.eval()
         for p in m.parameters():
@@ -393,6 +438,12 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
         "emotion_style_gate": emotion_style_gate,
         "bridge": bridge,
         "bridge_cache": ContextBridgeCache(),
+        "duration_rhythm_cache": DurationRhythmCache() if DurationRhythmCache is not None else None,
+        "acoustic_memory": acoustic_memory,
+        "acoustic_memory_cache": (
+            AcousticMemoryCache(max_frames=max(1, int(round(float(ckpt_args.get("acoustic_memory_seconds", 2.0)) * 93.75))))
+            if acoustic_memory is not None and AcousticMemoryCache is not None else None
+        ),
         "prior_mu": prior_mu,
         "dur_predictor": dur_predictor,
         "mel_flow": mel_flow,
@@ -557,6 +608,8 @@ def _sample_mel_flow_twopass_daemon(
 
 def _snapshot_state(components: Dict[str, Any]) -> Dict[str, Any]:
     bridge_cache = components["bridge_cache"]
+    rhythm_cache = components.get("duration_rhythm_cache")
+    acoustic_cache = components.get("acoustic_memory_cache")
     sid = f"snap_{int(time.time()*1000)}_{os.getpid()}_{len(_STATE_SNAPSHOTS)}"
     _STATE_SNAPSHOTS[sid] = {
         "mel": {k: v.clone() for k, v in _CONTINUITY_MEL_BY_KEY.items()},
@@ -569,6 +622,10 @@ def _snapshot_state(components: Dict[str, Any]) -> Dict[str, Any]:
         "bridge_prev_h": {k: v.clone() for k, v in bridge_cache._prev_h.items()},
         "bridge_prev_mask": {k: v.clone() for k, v in bridge_cache._prev_mask.items()},
         "bridge_last_chunk": dict(bridge_cache._last_chunk),
+        "rhythm_state": {k: v.clone() for k, v in getattr(rhythm_cache, "_state", {}).items()},
+        "rhythm_last_chunk": dict(getattr(rhythm_cache, "_last_chunk", {})),
+        "acoustic_tails": {k: v.clone() for k, v in getattr(acoustic_cache, "_tails", {}).items()},
+        "acoustic_last_chunk": dict(getattr(acoustic_cache, "_last_chunk", {})),
     }
     return {"snapshot_id": sid}
 
@@ -591,6 +648,14 @@ def _restore_state(components: Dict[str, Any], snapshot_id: str) -> Dict[str, An
     bridge_cache._prev_h = {k: v.clone() for k, v in snap["bridge_prev_h"].items()}
     bridge_cache._prev_mask = {k: v.clone() for k, v in snap["bridge_prev_mask"].items()}
     bridge_cache._last_chunk = dict(snap["bridge_last_chunk"])
+    rhythm_cache = components.get("duration_rhythm_cache")
+    if rhythm_cache is not None:
+        rhythm_cache._state = {k: v.clone() for k, v in snap.get("rhythm_state", {}).items()}
+        rhythm_cache._last_chunk = dict(snap.get("rhythm_last_chunk", {}))
+    acoustic_cache = components.get("acoustic_memory_cache")
+    if acoustic_cache is not None:
+        acoustic_cache._tails = {k: v.clone() for k, v in snap.get("acoustic_tails", {}).items()}
+        acoustic_cache._last_chunk = dict(snap.get("acoustic_last_chunk", {}))
     return {"restored": True}
 
 
@@ -705,6 +770,9 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     emotion_style_gate = components.get("emotion_style_gate")
     bridge = components["bridge"]
     bridge_cache = components["bridge_cache"]
+    rhythm_cache = components.get("duration_rhythm_cache")
+    acoustic_memory = components.get("acoustic_memory")
+    acoustic_cache = components.get("acoustic_memory_cache")
     prior_mu = components["prior_mu"]
     mel_flow = components["mel_flow"]
     vocos = components["vocos"]
@@ -843,6 +911,39 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     book_ids1 = torch.tensor([book_id], dtype=torch.long)
     chunk_idx1 = torch.tensor([text_chunk_idx], dtype=torch.long)
 
+    cache_key = (int(speaker_id_for_model), int(book_id))
+    if continuity_key and continuity_reset:
+        for cache, value_name in (
+            (bridge_cache, ("_mem", "_prev_h", "_prev_mask", "_last_chunk")),
+            (rhythm_cache, ("_state", "_last_chunk")),
+            (acoustic_cache, ("_tails", "_last_chunk")),
+        ):
+            if cache is not None:
+                for name in value_name:
+                    getattr(cache, name, {}).pop(cache_key, None)
+
+    rhythm_state1 = None
+    rhythm_available = False
+    if bool(ckpt_args.get("duration_rhythm_conditioning", False)) and rhythm_cache is not None:
+        rhythm_available = rhythm_cache._last_chunk.get(cache_key) == text_chunk_idx - 1
+        rhythm_state1 = rhythm_cache.get_batch(
+            speaker_ids=speaker_ids1, book_ids=book_ids1, chunk_idx=chunk_idx1,
+            device=device, dtype=torch.float32,
+        )
+
+    acoustic_attribute_override = None
+    acoustic_available = False
+    if bool(ckpt_args.get("acoustic_memory_conditioning", False)) and acoustic_memory is not None and acoustic_cache is not None:
+        prev_mel_bct, prev_lengths, prev_available = acoustic_cache.get_batch(
+            speaker_ids=speaker_ids1, book_ids=book_ids1, chunk_idx=chunk_idx1,
+            n_mels=N_MELS, device=device, dtype=torch.float32,
+        )
+        acoustic_token = acoustic_memory(prev_mel_bct, prev_lengths, prev_available)
+        acoustic_available = bool(prev_available.any().item())
+        acoustic_attribute_override = acoustic_memory.replace_prefix_token(
+            gender_embed(gender_ids1).float(), acoustic_token,
+        )
+
     # ---- Text features with the same stateful ContextBridge used by training/text demos ----
     encode_kwargs = dict(
         model=model,
@@ -858,6 +959,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
         bridge_cache=bridge_cache,
         spk_vec_override=spk_hidden.to(device=device, dtype=torch.float32),
         require_spk_override=bool(ckpt_args.get("require_spk_override", True)),
+        attribute_token_override=acoustic_attribute_override,
     )
     if emotion_enabled:
         encode_kwargs.update(
@@ -885,6 +987,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
         dur_prior_sigma_min=float(ckpt_args.get("dur_prior_sigma_min", 0.1)),
         initial_hc=_dur_lstm_hc,
         style_vec=style_vec,
+        rhythm_state=rhythm_state1,
     )
     _last_hc = getattr(_predict_dur_prior_direct, "_last_hc", None)
     if duration_stateful and _last_hc is not None and all(torch.is_tensor(t) for t in _last_hc):
@@ -907,6 +1010,11 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     dur_for_prior1 = torch.where(dur_allowed1, dur_pred1, torch.zeros_like(dur_pred1))
     pause_mask1 = _pause_mask_from_ids(ids_full1)
     sp_mask_tok1 = pause_mask1
+    if rhythm_state1 is not None:
+        rhythm_cache.set_batch(
+            speaker_ids=speaker_ids1, book_ids=book_ids1, chunk_idx=chunk_idx1,
+            durations=dur_for_prior1, token_ids=ids_full1,
+        )
 
     # Give the vocoder a short acoustic pre-roll before the first content token.
     # The duration model commonly predicts one <sp> frame (~11 ms), which puts
@@ -1029,6 +1137,12 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
 
     if continuity_key:
         _CONTINUITY_MEL_BY_KEY[continuity_key] = mel_out1.detach().to(device="cpu", dtype=torch.float32)
+    if acoustic_cache is not None:
+        acoustic_cache.set_batch(
+            speaker_ids=speaker_ids1, book_ids=book_ids1, chunk_idx=chunk_idx1,
+            mel_bct=mel_out1,
+            frame_lengths=torch.tensor([int(mel_out1.size(-1))], device=device),
+        )
 
     # ---- Digital silence on pauses ----
     mel_dec = mel_out1
@@ -1077,6 +1191,8 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
             "emotion_strength": emotion_strength,
             "emotion_enabled": emotion_enabled,
             "duration_stateful": duration_stateful,
+            "rhythm_memory_available": rhythm_available,
+            "acoustic_memory_available": acoustic_available,
             "learned_voice": learned_voice_enabled,
             "speaker_id": int(speaker_id_for_model),
             "durations": dur_debug,
