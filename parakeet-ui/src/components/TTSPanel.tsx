@@ -433,43 +433,47 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
       </section>
 
       <aside className="dub-inspector">
-        <section className="inspector-section">
-          <div className="inspector-title"><Mic2 size={17} /><h3>{locale === 'pl' ? 'Głos' : 'Voice'}</h3></div>
-          <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)} disabled={speakersLoading || !!speakerLoadError}>
-            {!speakers.length && <option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : (locale === 'pl' ? 'Brak głosów' : 'No voices')}</option>}
-            {speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.display_name ?? item.label}</option>)}
-          </select></label>
-          {speakersLoading && <p className="speaker-loading"><Loader2 className="spin" size={14} />{locale === 'pl' ? 'Ładowanie listy głosów…' : 'Loading voice list…'}</p>}
-          {speakerLoadError && <div className="speaker-load-error"><AlertTriangle size={15} /><span>{speakerLoadError}</span><button className="button button-secondary button-small" onClick={() => void loadSpeakerOptions()}><RefreshCw size={14} />{locale === 'pl' ? 'Ponów' : 'Retry'}</button></div>}
-          <label><span className="field-label">{locale === 'pl' ? 'Język dubbingu' : 'Dubbing language'}</span>
-            <select value={speechLang} onChange={e => { setSpeechLang(e.target.value); setResult(null); }} disabled={running}>
-              <option value="pl">Polski</option>
-              <option value="en">English</option>
-            </select>
-          </label>
-          <label className="upload-button"><Upload size={15} /><span>{t('addVoice')}</span><input type="file" className="sr-only" accept="audio/*,video/*" onChange={e => void addVoicePrompt(e.target.files?.[0] ?? null)} /></label>
-          {promptStatus && <p className="mini-success"><CheckCircle2 size={14} />{promptStatus}</p>}
-        </section>
+        <div className="inspector-scroll">
+          <section className="inspector-section">
+            <div className="inspector-title"><Mic2 size={17} /><h3>{locale === 'pl' ? 'Głos' : 'Voice'}</h3></div>
+            <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)} disabled={speakersLoading || !!speakerLoadError}>
+              {!speakers.length && <option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : (locale === 'pl' ? 'Brak głosów' : 'No voices')}</option>}
+              {speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.display_name ?? item.label}</option>)}
+            </select></label>
+            {speakersLoading && <p className="speaker-loading"><Loader2 className="spin" size={14} />{locale === 'pl' ? 'Ładowanie listy głosów…' : 'Loading voice list…'}</p>}
+            {speakerLoadError && <div className="speaker-load-error"><AlertTriangle size={15} /><span>{speakerLoadError}</span><button className="button button-secondary button-small" onClick={() => void loadSpeakerOptions()}><RefreshCw size={14} />{locale === 'pl' ? 'Ponów' : 'Retry'}</button></div>}
+            <label><span className="field-label">{locale === 'pl' ? 'Język dubbingu' : 'Dubbing language'}</span>
+              <select value={speechLang} onChange={e => { setSpeechLang(e.target.value); setResult(null); }} disabled={running}>
+                <option value="pl">Polski</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label className="upload-button"><Upload size={15} /><span>{t('addVoice')}</span><input type="file" className="sr-only" accept="audio/*,video/*" onChange={e => void addVoicePrompt(e.target.files?.[0] ?? null)} /></label>
+            {promptStatus && <p className="mini-success"><CheckCircle2 size={14} />{promptStatus}</p>}
+          </section>
 
-        <section className="inspector-section">
-          <div className="inspector-title"><Gauge size={17} /><h3>{t('tempo')}</h3></div>
-          <Slider label={locale === 'pl' ? 'Bazowe' : 'Base'} value={baseSpeed} display={`${baseSpeed.toFixed(2)}×`} min={0.75} max={1.35} step={0.05} onChange={setBaseSpeed} />
-          <Slider label={locale === 'pl' ? 'Maksymalne dopasowanie' : 'Maximum fitting'} value={maxSpeed} display={`${maxSpeed.toFixed(2)}×`} min={1} max={1.3} step={0.05} onChange={setMaxSpeed} />
-        </section>
+          <section className="inspector-section">
+            <div className="inspector-title"><Gauge size={17} /><h3>{t('tempo')}</h3></div>
+            <Slider label={locale === 'pl' ? 'Bazowe' : 'Base'} value={baseSpeed} display={`${baseSpeed.toFixed(2)}×`} min={0.75} max={1.35} step={0.05} onChange={setBaseSpeed} />
+            <Slider label={locale === 'pl' ? 'Maksymalne dopasowanie' : 'Maximum fitting'} value={maxSpeed} display={`${maxSpeed.toFixed(2)}×`} min={1} max={1.3} step={0.05} onChange={setMaxSpeed} />
+          </section>
 
-        <section className="inspector-section">
-          <div className="inspector-title"><SlidersHorizontal size={17} /><h3>{t('mix')}</h3></div>
-          <Slider label={locale === 'pl' ? 'Tło oryginału' : 'Original background'} value={originalGain} display={`${Math.round(originalGain * 100)}%`} min={0} max={1} step={0.01} onChange={setOriginalGain} />
-          <Slider label="Dubbing" value={dubbingGain} display={`${Math.round(dubbingGain * 100)}%`} min={0.5} max={1.3} step={0.01} onChange={setDubbingGain} />
-          <Slider label="Ducking" value={ducking} display={`${Math.round(ducking * 100)}%`} min={0} max={1} step={0.01} onChange={setDucking} />
-          <div className="mix-meter"><Music2 size={14} /><span>{t('originalBackground')}</span><Volume2 size={14} /></div>
-        </section>
+          <section className="inspector-section">
+            <div className="inspector-title"><SlidersHorizontal size={17} /><h3>{t('mix')}</h3></div>
+            <Slider label={locale === 'pl' ? 'Tło oryginału' : 'Original background'} value={originalGain} display={`${Math.round(originalGain * 100)}%`} min={0} max={1} step={0.01} onChange={setOriginalGain} />
+            <Slider label="Dubbing" value={dubbingGain} display={`${Math.round(dubbingGain * 100)}%`} min={0.5} max={1.3} step={0.01} onChange={setDubbingGain} />
+            <Slider label="Ducking" value={ducking} display={`${Math.round(ducking * 100)}%`} min={0} max={1} step={0.01} onChange={setDucking} />
+            <div className="mix-meter"><Music2 size={14} /><span>{t('originalBackground')}</span><Volume2 size={14} /></div>
+          </section>
+        </div>
 
-        {(running || error) && <JobProgress message={message} progress={progress} error={error || undefined} />}
-        {quotaExceeded && <QuotaExceededNotice />}
-        <button className="button button-primary render-button" onClick={() => void run()} disabled={running || !speaker || !ttsModel}>
-          <WandSparkles size={17} />{running ? (locale === 'pl' ? 'Renderuję…' : 'Rendering…') : result ? (locale === 'pl' ? 'Renderuj ponownie' : 'Render again') : (locale === 'pl' ? 'Renderuj dubbing' : 'Render dubbing')}
-        </button>
+        <div className="inspector-actions">
+          {(running || error) && <div className="inspector-progress"><JobProgress message={message} progress={progress} error={error || undefined} /></div>}
+          {quotaExceeded && <QuotaExceededNotice />}
+          <button className="button button-primary render-button" onClick={() => void run()} disabled={running || !speaker || !ttsModel}>
+            <WandSparkles size={17} />{running ? (locale === 'pl' ? 'Renderuję…' : 'Rendering…') : result ? (locale === 'pl' ? 'Renderuj ponownie' : 'Render again') : (locale === 'pl' ? 'Renderuj dubbing' : 'Render dubbing')}
+          </button>
+        </div>
       </aside>
     </div>
   );
