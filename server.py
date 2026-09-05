@@ -1641,6 +1641,7 @@ def _worker_transcribe_youtube(job: Job, url: str) -> None:
 class TranslateRequest(BaseModel):
     segments: list[dict[str, Any]]
     source_lang: str = "auto"
+    source_lang_hint: str = ""
     target_lang: str = "pl"
     mode: str = ""
     model: str = ""
@@ -1690,6 +1691,7 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
         translated, meta = core.translate_segments_to_pl(
             segments=list(req.segments),
             source_lang=req.source_lang,
+            source_lang_hint=req.source_lang_hint,
             target_lang=req.target_lang,
             api_key=key,
             endpoint=str(core._CONFIG.get("translation_endpoint", "")),

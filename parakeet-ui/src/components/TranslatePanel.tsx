@@ -14,6 +14,16 @@ interface Props {
   onContinue?: () => void;
 }
 
+const SOURCE_LANGUAGES = [
+  ['bg', 'Bulgarian'], ['hr', 'Croatian'], ['cs', 'Czech'], ['da', 'Danish'],
+  ['nl', 'Dutch'], ['en', 'English'], ['et', 'Estonian'], ['fi', 'Finnish'],
+  ['fr', 'French'], ['de', 'German'], ['el', 'Greek'], ['hu', 'Hungarian'],
+  ['it', 'Italian'], ['lv', 'Latvian'], ['lt', 'Lithuanian'], ['mt', 'Maltese'],
+  ['pl', 'Polski'], ['pt', 'Portuguese'], ['ro', 'Romanian'], ['sk', 'Slovak'],
+  ['sl', 'Slovenian'], ['es', 'Spanish'], ['sv', 'Swedish'], ['ru', 'Russian'],
+  ['uk', 'Ukrainian'],
+] as const;
+
 function fmt(s: number) {
   const m = Math.floor(s / 60), sec = Math.floor(s % 60);
   return `${m}:${String(sec).padStart(2, '0')}`;
@@ -46,7 +56,8 @@ export default function TranslatePanel({ segments, sourceLang, onDone, onContinu
     setRunning(true); setError(''); setProgress(0); setMessage('Przygotowuję tłumaczenie…');
     try {
       const jobId = await submitTranslation({
-        segments: sourceSegments, source_lang: activeSourceLang, target_lang: targetLang,
+        segments: sourceSegments, source_lang: activeSourceLang,
+        source_lang_hint: pastedMode ? '' : sourceLang, target_lang: targetLang,
         mode: '', model: '', api_key: '', batch_segments: 0,
       });
       await new Promise<void>((resolve, reject) => {
@@ -81,10 +92,7 @@ export default function TranslatePanel({ segments, sourceLang, onDone, onContinu
           <label className="inline-field"><span>{locale === 'pl' ? 'Język źródłowy' : 'Source language'}</span>
             <select value={inputSourceLang} onChange={e => setInputSourceLang(e.target.value)} disabled={running || !!result}>
               <option value="auto">{locale === 'pl' ? `Automatycznie${!pastedMode && sourceLang ? ` (ASR: ${sourceLang.toUpperCase()})` : ''}` : `Automatic${!pastedMode && sourceLang ? ` (ASR: ${sourceLang.toUpperCase()})` : ''}`}</option>
-              <option value="pl">Polski</option><option value="en">English</option><option value="de">Deutsch</option>
-              <option value="fr">Français</option><option value="es">Español</option><option value="it">Italiano</option>
-              <option value="uk">Українська</option><option value="ru">Русский</option>
-              <option value="hi">Hindi (romanized)</option><option value="ur">Urdu (romanized)</option>
+              {SOURCE_LANGUAGES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
             </select>
           </label>
           <label className="inline-field"><span>{t('targetLanguage')}</span>

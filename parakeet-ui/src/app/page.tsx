@@ -192,7 +192,7 @@ function Studio({ user, onLogout, onHome }: { user: User; onLogout: () => void; 
         {service !== 'voice' && service !== 'account' && service !== 'admin' && <PipelineBar service={service} hasTranscript={!!transcribeResult} hasTranslation={!!translateResult} onSelect={setService} />}
 
         {service === 'transcribe' && (!transcribeResult ? intake : <>
-          <div className="workspace-toolbar"><div><h2>{projectName}</h2><p>{transcribeResult.detected_language.toUpperCase()} · {transcribeResult.word_count} {locale === 'pl' ? 'słów' : 'words'} · {transcribeResult.segment_count} {locale === 'pl' ? 'segmentów' : 'segments'}</p></div>
+          <div className="workspace-toolbar"><div><h2>{projectName}</h2><p>ASR: {transcribeResult.detected_language.toUpperCase()} · {transcribeResult.word_count} {locale === 'pl' ? 'słów' : 'words'} · {transcribeResult.segment_count} {locale === 'pl' ? 'segmentów' : 'segments'}</p></div>
             <button className="button button-primary" onClick={() => setService('translate')}>{t('translate')} <ChevronRight size={16} /></button></div>
           <section className="panel transcript-surface"><TranscriptPanel result={transcribeResult} audioSrc={audioSrc} /></section>
         </>)}

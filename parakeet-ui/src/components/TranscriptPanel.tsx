@@ -28,6 +28,11 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
   const [activeSeg, setActiveSeg] = useState(-1);
   const audioRef = useRef<HTMLAudioElement>(null);
   const rafRef = useRef<number>(0);
+  const asrLanguage = (result.detected_language || 'auto').toUpperCase();
+  const languageBreakdown = Object.entries(result.language_counts ?? {})
+    .sort((left, right) => right[1] - left[1])
+    .map(([language, count]) => `${language.toUpperCase()}: ${count}`)
+    .join(', ');
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -83,8 +88,9 @@ export default function TranscriptPanel({ result, audioSrc }: Props) {
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
         <h2 className="text-base font-semibold">{t('materialSource')}</h2>
-        <span className="bg-accent-dim text-blue-200 text-xs font-bold px-2 py-0.5 rounded">
-          {(result.detected_language || 'auto').toUpperCase()}
+        <span className="bg-accent-dim text-blue-200 text-xs font-bold px-2 py-0.5 rounded"
+          title={`${locale === 'pl' ? 'Automatyczna detekcja Parakeet' : 'Parakeet automatic detection'}${languageBreakdown ? `: ${languageBreakdown}` : ''}`}>
+          ASR: {asrLanguage}
         </span>
         <span className="text-xs text-muted">
           {result.word_count} {locale === 'pl' ? 'słów' : 'words'} · {result.segment_count} {locale === 'pl' ? 'segmentów' : 'segments'} · {fmt(result.duration)}

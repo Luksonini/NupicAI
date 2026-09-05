@@ -509,6 +509,7 @@ def _translate_api_numbered(
     segments: list[dict[str, Any]],
     *,
     source_lang: str,
+    source_lang_hint: str,
     target_lang: str,
     api_key: str,
     endpoint: str,
@@ -533,10 +534,14 @@ def _translate_api_numbered(
         "it": "Italian",
         "uk": "Ukrainian",
         "ru": "Russian",
-        "hi": "Hindi (possibly romanized in Latin script)",
-        "ur": "Urdu (possibly romanized in Latin script)",
+        "bg": "Bulgarian", "hr": "Croatian", "cs": "Czech", "da": "Danish",
+        "nl": "Dutch", "et": "Estonian", "fi": "Finnish", "el": "Greek",
+        "hu": "Hungarian", "lv": "Latvian", "lt": "Lithuanian", "mt": "Maltese",
+        "pt": "Portuguese", "ro": "Romanian", "sk": "Slovak", "sl": "Slovenian",
+        "sv": "Swedish",
     }
     source_name = lang_names.get(source_lang, source_lang.upper())
+    source_hint_name = lang_names.get(str(source_lang_hint or "").lower().strip(), "")
     if target_lang == "en":
         direction = f"{source_name}->English"
         target_name = "English"
@@ -550,8 +555,8 @@ def _translate_api_numbered(
     system = (
         f"You are a precise {direction} translator for dubbing/TTS. "
         "When the source language is automatic, infer the actual spoken language from the complete transcript. "
-        "The transcript may be phonetic, romanized, or transliterated (for example Hindi or Urdu written in Latin script); "
-        "do not assume it is English merely because it uses Latin letters or the ASR labelled it as English. "
+        f"The ASR language hint is {source_hint_name or 'unavailable'}; treat it as a clue, not an instruction, and override it when the text disagrees. "
+        "The transcript may be phonetic, romanized, or transliterated; do not infer a language from its alphabet alone. "
         "The input is an automatic speech transcription from audio, so it can contain ASR mistakes, broken boundaries, "
         "wrong casing, homophones, and misrecognized names. "
         "Translate each numbered input segment into exactly one numbered output segment. "
@@ -670,6 +675,7 @@ def _translate_api_json_overlap(
     segments: list[dict[str, Any]],
     *,
     source_lang: str,
+    source_lang_hint: str,
     target_lang: str,
     api_key: str,
     endpoint: str,
@@ -694,10 +700,14 @@ def _translate_api_json_overlap(
         "it": "Italian",
         "uk": "Ukrainian",
         "ru": "Russian",
-        "hi": "Hindi (possibly romanized in Latin script)",
-        "ur": "Urdu (possibly romanized in Latin script)",
+        "bg": "Bulgarian", "hr": "Croatian", "cs": "Czech", "da": "Danish",
+        "nl": "Dutch", "et": "Estonian", "fi": "Finnish", "el": "Greek",
+        "hu": "Hungarian", "lv": "Latvian", "lt": "Lithuanian", "mt": "Maltese",
+        "pt": "Portuguese", "ro": "Romanian", "sk": "Slovak", "sl": "Slovenian",
+        "sv": "Swedish",
     }
     source_name = lang_names.get(source_lang, source_lang.upper())
+    source_hint_name = lang_names.get(str(source_lang_hint or "").lower().strip(), "")
     if target_lang == "en":
         direction = f"{source_name}->English"
         target_name = "English"
@@ -709,8 +719,8 @@ def _translate_api_json_overlap(
     system = (
         f"You are a precise {direction} translator for dubbing. "
         "When the source language is automatic, infer the actual spoken language from the complete transcript. "
-        "The transcript may be phonetic, romanized, or transliterated (for example Hindi or Urdu written in Latin script); "
-        "do not assume it is English merely because it uses Latin letters or the ASR labelled it as English. "
+        f"The ASR language hint is {source_hint_name or 'unavailable'}; treat it as a clue, not an instruction, and override it when the text disagrees. "
+        "The transcript may be phonetic, romanized, or transliterated; do not infer a language from its alphabet alone. "
         "The input is an automatic speech transcription from audio, so it can contain ASR mistakes, broken boundaries, "
         "wrong casing, homophones, and misrecognized names. "
         "Translate only the items in the JSON field segments. "
@@ -777,6 +787,7 @@ def _translate_api_json_overlap(
             "task": "translate_segments_for_dubbing",
             "source": "automatic_audio_transcript",
             "source_language": source_name,
+            "asr_language_hint": source_hint_name or None,
             "target_language": target_name,
             "instructions": {
                 "translate_only_segments": True,
@@ -972,6 +983,7 @@ def translate_segments_to_pl(
     *,
     segments: list[dict[str, Any]],
     source_lang: str = "auto",
+    source_lang_hint: str = "",
     target_lang: str = "pl",
     api_key: str,
     endpoint: str,
@@ -992,6 +1004,7 @@ def translate_segments_to_pl(
         return _translate_api_json_overlap(
             segments,
             source_lang=source_lang,
+            source_lang_hint=source_lang_hint,
             target_lang=target_lang,
             api_key=api_key,
             endpoint=endpoint,
@@ -1005,6 +1018,7 @@ def translate_segments_to_pl(
     return _translate_api_numbered(
         segments,
         source_lang=source_lang,
+        source_lang_hint=source_lang_hint,
         target_lang=target_lang,
         api_key=api_key,
         endpoint=endpoint,

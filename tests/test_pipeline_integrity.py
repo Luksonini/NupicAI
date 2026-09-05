@@ -23,6 +23,7 @@ class PipelineIntegrityTests(unittest.TestCase):
             translated, _ = translation_core.translate_segments_to_pl(
                 segments=[{"index": 0, "text": "ye automatically pani ko apne andar samana shuru kar dete"}],
                 source_lang="auto",
+                source_lang_hint="en",
                 target_lang="pl",
                 api_key="test-key",
                 endpoint="https://example.invalid/v1/chat/completions",
@@ -33,8 +34,10 @@ class PipelineIntegrityTests(unittest.TestCase):
         self.assertEqual(translated[0]["text"], "Przetłumaczony tekst.")
         messages = api_call.call_args.kwargs["messages"]
         self.assertIn("romanized", messages[0]["content"])
+        self.assertIn("ASR language hint is English", messages[0]["content"])
         payload = json.loads(messages[-1]["content"].removeprefix("/no_think\n"))
         self.assertEqual(payload["source_language"], "the source language detected from the transcript")
+        self.assertEqual(payload["asr_language_hint"], "English")
         self.assertEqual(payload["target_language"], "Polish")
 
     def test_maskgit_continuity_profile_is_packaged_and_scoped(self) -> None:

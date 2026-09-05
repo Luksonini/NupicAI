@@ -120,6 +120,7 @@ export function sourceUrl(jobId: string): string {
 export async function submitTranslation(params: {
   segments: unknown[];
   source_lang: string;
+  source_lang_hint: string;
   target_lang: string;
   mode: string;
   model: string;
