@@ -1,5 +1,10 @@
 # NupicAI Studio
 
+Zasady wspolnej pracy, branchy i oddzielenia konfiguracji serwera opisuje
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Aktualizacja juz dzialajacego serwera bez
+ponownej instalacji ROCm jest opisana w
+[`deploy/UPDATE_EXISTING_SERVER.md`](deploy/UPDATE_EXISTING_SERVER.md).
+
 Hermetyczny folder aplikacji do transkrypcji, tlumaczenia, dubbingu i syntezy glosu z lokalnym ASR Parakeet, lokalnym TTS Wegorz, lokalnym vocoderem Vocos, lokalnym bankiem glosow oraz lokalnym modelem tlumaczenia Wegorz.
 
 NupicAI jest marka aplikacji. Nazwa Wegorz pozostaje nazwa lokalnego silnika TTS i translatora.

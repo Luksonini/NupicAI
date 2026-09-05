@@ -2,8 +2,13 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
+.env.local
+.env.production.local
 parakeet_config.json
 admin_config.json
+compose.override.yaml
+compose.override.yml
+deploy/local/
 runtime/
 parakeet-ui/node_modules/
 parakeet-ui/.next/
