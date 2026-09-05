@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import {
-  AlertTriangle, CheckCircle2, Download, Gauge, Mic2, Music2, Play,
+  AlertTriangle, Check, CheckCircle2, Download, Gauge, Loader2, Mic2, Music2, Play,
   Link2, Redo2, RefreshCw, RotateCcw, Scissors, SlidersHorizontal, Undo2, Upload, UserRound,
-  Volume2, WandSparkles,
+  Volume2, WandSparkles, X,
 } from 'lucide-react';
 import type { Segment, Speaker, DubResult } from '@/lib/types';
 import {
@@ -70,9 +70,36 @@ function splitTextNearRatio(text: string, ratio: number): [string, string] {
   return [value.slice(0, cut).trim(), value.slice(cut).trim()];
 }
 
+function splitPositions(text: string): number[] {
+  const positions: number[] = [];
+  const whitespace = /\s+/g;
+  let match: RegExpExecArray | null;
+  while ((match = whitespace.exec(text)) !== null) {
+    const position = match.index;
+    if (position > 0 && position < text.length - match[0].length) positions.push(position);
+  }
+  return positions;
+}
+
+function nearestSplitPosition(text: string, wanted: number): number | null {
+  const positions = splitPositions(text);
+  if (!positions.length) return null;
+  return positions.reduce((best, position) => (
+    Math.abs(position - wanted) < Math.abs(best - wanted) ? position : best
+  ));
+}
+
+function splitPositionLabel(text: string, position: number): string {
+  const left = text.slice(0, position).trim().split(/\s+/).slice(-3).join(' ');
+  const right = text.slice(position).trim().split(/\s+/).slice(0, 3).join(' ');
+  return `${left}  |  ${right}`;
+}
+
 export default function TTSPanel({ segments, targetLang, transcribeJobId, originalSrc, hasVideo }: Props) {
   const { locale, t } = useLocale();
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
+  const [speakersLoading, setSpeakersLoading] = useState(true);
+  const [speakerLoadError, setSpeakerLoadError] = useState('');
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
   const [speechLang, setSpeechLang] = useState(targetLang === 'en' ? 'en' : 'pl');
@@ -99,6 +126,8 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   const undoStackRef = useRef<Segment[][]>([]);
   const redoStackRef = useRef<Segment[][]>([]);
   const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 });
+  const [splitDraft, setSplitDraft] = useState<{ segmentId: string; position: number } | null>(null);
+  const [editorNotice, setEditorNotice] = useState('');
 
   const refreshHistorySize = () => setHistorySize({
     undo: undoStackRef.current.length,
@@ -112,11 +141,13 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     refreshHistorySize();
   };
 
-  const commitSegments = (next: Segment[]) => {
+  const commitSegments = (next: Segment[], notice = '') => {
     rememberSnapshot(editableSegments);
-    setEditableSegments(next);
+    setEditableSegments(next.map((segment, index) => ({ ...segment, index })));
     setResult(null);
     setError('');
+    setSplitDraft(null);
+    setEditorNotice(notice);
   };
 
   const undoEdit = () => {
@@ -124,7 +155,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     if (!previous) return;
     redoStackRef.current.push(cloneSegments(editableSegments));
     setEditableSegments(cloneSegments(previous));
-    setResult(null); setError(''); refreshHistorySize();
+    setResult(null); setError(''); setSplitDraft(null); setEditorNotice(''); refreshHistorySize();
   };
 
   const redoEdit = () => {
@@ -132,13 +163,14 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     if (!next) return;
     undoStackRef.current.push(cloneSegments(editableSegments));
     setEditableSegments(cloneSegments(next));
-    setResult(null); setError(''); refreshHistorySize();
+    setResult(null); setError(''); setSplitDraft(null); setEditorNotice(''); refreshHistorySize();
   };
 
   useEffect(() => {
     setEditableSegments(prepareSegments(segments));
     undoStackRef.current = []; redoStackRef.current = []; textEditStartRef.current = {};
     setHistorySize({ undo: 0, redo: 0 });
+    setSplitDraft(null); setEditorNotice('');
     setResult(null); setDubJobId('');
   }, [segments]);
 
@@ -163,8 +195,22 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     return () => window.removeEventListener('keydown', handleHistoryShortcut);
   });
 
+  const loadSpeakerOptions = async () => {
+    setSpeakersLoading(true); setSpeakerLoadError('');
+    try {
+      const list = await listSpeakers();
+      if (!list.length) throw new Error(locale === 'pl' ? 'Serwer nie zwrócił listy głosów.' : 'The server returned no voices.');
+      setSpeakers(list);
+      setSpeaker(current => list.some(item => item.label === current) ? current : list[0].label);
+    } catch (loadError: unknown) {
+      setSpeakerLoadError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      setSpeakersLoading(false);
+    }
+  };
+
   useEffect(() => {
-    listSpeakers().then(list => { setSpeakers(list); if (list.length) setSpeaker(list[0].label); });
+    void loadSpeakerOptions();
     listTTSModels().then(data => {
       setTtsModel(data.default || data.active || data.models[0]?.key || '');
       setFlowSettings(data.flow_defaults);
@@ -223,18 +269,33 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
       render_nonce: 0,
       speaker_label: first.speaker_label || second.speaker_label,
     };
-    commitSegments([...editableSegments.slice(0, index), merged, ...editableSegments.slice(index + 2)]);
+    commitSegments(
+      [...editableSegments.slice(0, index), merged, ...editableSegments.slice(index + 2)],
+      locale === 'pl' ? `Połączono segment ${index + 1} z następnym.` : `Merged segment ${index + 1} with the next segment.`,
+    );
   };
 
-  const splitAtCursor = (index: number) => {
+  const openSplitEditor = (index: number) => {
     const segment = editableSegments[index];
-    const text = String(segment.translation ?? segment.text ?? '').trim();
-    const cursor = textareaRefs.current[String(segment.segment_id)]?.selectionStart ?? -1;
-    if (cursor <= 0 || cursor >= text.length) {
-      setError(locale === 'pl' ? 'Ustaw kursor w miejscu podziału tekstu.' : 'Place the cursor where the text should be split.');
+    const segmentId = String(segment.segment_id);
+    const text = String(segment.translation ?? segment.text ?? '');
+    const cursor = textareaRefs.current[segmentId]?.selectionStart ?? Math.round(text.length / 2);
+    const position = nearestSplitPosition(text, cursor);
+    if (position === null) {
+      setEditorNotice(locale === 'pl' ? 'Ten segment nie ma granicy między słowami.' : 'This segment has no boundary between words.');
       return;
     }
-    const [left, right] = splitTextNearRatio(text, cursor / text.length);
+    setSplitDraft({ segmentId, position });
+    setEditorNotice('');
+  };
+
+  const confirmSplit = (index: number) => {
+    const segment = editableSegments[index];
+    const segmentId = String(segment.segment_id);
+    if (!splitDraft || splitDraft.segmentId !== segmentId) return;
+    const text = String(segment.translation ?? segment.text ?? '');
+    const left = text.slice(0, splitDraft.position).trim();
+    const right = text.slice(splitDraft.position).trim();
     if (!left || !right) return;
     const ratio = left.length / Math.max(1, left.length + right.length);
     const middle = Number(segment.start) + (Number(segment.end) - Number(segment.start)) * ratio;
@@ -244,11 +305,17 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     const common = { ...segment, words: undefined, render_nonce: 0 };
     const first: Segment = { ...common, end: middle, text: sourceLeft || left, source_text: sourceLeft, translation: left, segment_id: freshSegmentId(), seed: 1234 + index };
     const second: Segment = { ...common, start: middle, text: sourceRight || right, source_text: sourceRight, translation: right, segment_id: freshSegmentId(), seed: 2234 + index };
-    commitSegments([...editableSegments.slice(0, index), first, second, ...editableSegments.slice(index + 1)]);
+    commitSegments(
+      [...editableSegments.slice(0, index), first, second, ...editableSegments.slice(index + 1)],
+      locale === 'pl' ? `Podzielono segment ${index + 1}.` : `Split segment ${index + 1}.`,
+    );
   };
 
   const restoreSegments = () => {
-    commitSegments(prepareSegments(segments));
+    commitSegments(
+      prepareSegments(segments),
+      locale === 'pl' ? 'Przywrócono pierwotny podział.' : 'Original segmentation restored.',
+    );
   };
 
   const beginTextEdit = (segmentId: string) => {
@@ -321,23 +388,33 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
             <button className="icon-button" disabled={!historySize.redo} onClick={redoEdit} title={locale === 'pl' ? 'Ponów zmianę' : 'Redo change'}><Redo2 size={15} /></button>
             <button className="button button-ghost button-small" onClick={restoreSegments}><RotateCcw size={14} />{locale === 'pl' ? 'Przywróć podział' : 'Restore split'}</button>
           </div></div>
+          {editorNotice && <div className="segment-editor-notice" role="status"><CheckCircle2 size={15} />{editorNotice}</div>}
           <div className="segment-table">
             {editableSegments.map((seg, i) => {
               const budget = Math.max(0.1, Number(seg.end) - Number(seg.start));
               const charsPerSec = String(seg.translation ?? seg.text).length / budget;
               const segmentId = String(seg.segment_id);
+              const activeSplit = splitDraft?.segmentId === segmentId;
+              const availableSplitPositions = activeSplit ? splitPositions(String(seg.translation ?? seg.text ?? '')) : [];
               return <article className="edit-segment-row" key={segmentId}>
                 <button className="timecode" onClick={() => seekTo(Number(seg.start))}>{fmt(Number(seg.start))}</button>
-                <div className="segment-copy"><p className="source-line">{seg.source_text ?? seg.text}</p>
+                <div className="segment-copy"><p className="source-line"><span>{locale === 'pl' ? 'Oryginał' : 'Original'}</span>{seg.source_text ?? seg.text}</p>
+                  <label className="segment-text-label" htmlFor={`segment-text-${segmentId}`}>{locale === 'pl' ? 'Tekst dubbingu' : 'Dubbing text'}</label>
                   <textarea ref={node => { textareaRefs.current[segmentId] = node; }} value={seg.translation ?? seg.text}
+                    id={`segment-text-${segmentId}`}
                     onFocus={() => beginTextEdit(segmentId)} onBlur={() => finishTextEdit(segmentId)}
-                    onChange={e => { setEditableSegments(prev => prev.map((item, idx) => idx === i ? { ...item, translation: e.target.value } : item)); setResult(null); }} />
+                    onChange={e => { setEditableSegments(prev => prev.map((item, idx) => idx === i ? { ...item, translation: e.target.value } : item)); setSplitDraft(null); setEditorNotice(''); setResult(null); }} />
                   <div className="segment-tools">
-                    <label title={locale === 'pl' ? 'Głos tylko dla tego fragmentu' : 'Voice for this segment only'}><UserRound size={14} /><select value={seg.speaker_label ?? ''} onChange={e => commitSegments(editableSegments.map((item, idx) => idx === i ? { ...item, speaker_label: e.target.value || undefined } : item))}><option value="">{locale === 'pl' ? 'Głos główny' : 'Main voice'}</option>{speakers.map(item => <option key={item.label} value={item.label}>{item.display_name ?? item.label}</option>)}</select></label>
-                    <button className="icon-button" title={locale === 'pl' ? 'Podziel przy kursorze' : 'Split at cursor'} onClick={() => splitAtCursor(i)}><Scissors size={15} /></button>
-                    {i < editableSegments.length - 1 && <button className="icon-button" title={locale === 'pl' ? 'Połącz z następnym fragmentem' : 'Merge with next segment'} onClick={() => mergeWithNext(i)}><Link2 size={15} /></button>}
+                    <label title={locale === 'pl' ? 'Głos tylko dla tego fragmentu' : 'Voice for this segment only'}><UserRound size={14} /><select value={seg.speaker_label ?? ''} disabled={speakersLoading || !!speakerLoadError} onChange={e => commitSegments(editableSegments.map((item, idx) => idx === i ? { ...item, speaker_label: e.target.value || undefined } : item))}><option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : `${locale === 'pl' ? 'Głos główny' : 'Main voice'}${speaker ? `: ${speakers.find(item => item.label === speaker)?.display_name ?? speaker}` : ''}`}</option>{speakers.map(item => <option key={item.label} value={item.label}>{item.display_name ?? item.label}</option>)}</select></label>
+                    <button className={`button button-ghost button-small segment-action${activeSplit ? ' active' : ''}`} onClick={() => openSplitEditor(i)}><Scissors size={14} />{locale === 'pl' ? 'Podziel' : 'Split'}</button>
+                    {i < editableSegments.length - 1 && <button className="button button-ghost button-small segment-action" onClick={() => mergeWithNext(i)}><Link2 size={14} />{locale === 'pl' ? 'Połącz z następnym' : 'Merge next'}</button>}
                     {result && <button className="icon-button" disabled={running} title={locale === 'pl' ? 'Wygeneruj ponownie tylko ten fragment' : 'Regenerate only this segment'} onClick={() => regenerateSegment(i)}><RefreshCw size={15} /></button>}
                   </div>
+                  {activeSplit && <div className="split-editor">
+                    <label><span className="field-label">{locale === 'pl' ? 'Miejsce podziału' : 'Split position'}</span><select value={splitDraft.position} onChange={event => setSplitDraft({ segmentId, position: Number(event.target.value) })}>{availableSplitPositions.map(position => <option key={position} value={position}>{splitPositionLabel(String(seg.translation ?? seg.text ?? ''), position)}</option>)}</select></label>
+                    <button className="button button-primary button-small" onClick={() => confirmSplit(i)}><Check size={14} />{locale === 'pl' ? 'Zatwierdź' : 'Apply'}</button>
+                    <button className="icon-button" onClick={() => setSplitDraft(null)} title={locale === 'pl' ? 'Anuluj podział' : 'Cancel split'}><X size={15} /></button>
+                  </div>}
                 </div>
                 <span className={`density-indicator ${charsPerSec > 19 ? 'risk' : ''}`} title={locale === 'pl' ? 'Gęstość tekstu względem czasu' : 'Text density against available time'}>{charsPerSec.toFixed(1)} {locale === 'pl' ? 'zn./s' : 'char/s'}</span>
               </article>;
@@ -349,9 +426,12 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
       <aside className="dub-inspector">
         <section className="inspector-section">
           <div className="inspector-title"><Mic2 size={17} /><h3>{locale === 'pl' ? 'Głos' : 'Voice'}</h3></div>
-          <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)}>
+          <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)} disabled={speakersLoading || !!speakerLoadError}>
+            {!speakers.length && <option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : (locale === 'pl' ? 'Brak głosów' : 'No voices')}</option>}
             {speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.display_name ?? item.label}</option>)}
           </select></label>
+          {speakersLoading && <p className="speaker-loading"><Loader2 className="spin" size={14} />{locale === 'pl' ? 'Ładowanie listy głosów…' : 'Loading voice list…'}</p>}
+          {speakerLoadError && <div className="speaker-load-error"><AlertTriangle size={15} /><span>{speakerLoadError}</span><button className="button button-secondary button-small" onClick={() => void loadSpeakerOptions()}><RefreshCw size={14} />{locale === 'pl' ? 'Ponów' : 'Retry'}</button></div>}
           <label><span className="field-label">{locale === 'pl' ? 'Język dubbingu' : 'Dubbing language'}</span>
             <select value={speechLang} onChange={e => { setSpeechLang(e.target.value); setResult(null); }} disabled={running}>
               <option value="pl">Polski</option>
