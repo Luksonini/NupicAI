@@ -45,13 +45,20 @@ function freshSegmentId() {
 }
 
 function prepareSegments(segments: Segment[]): Segment[] {
-  return segments.map((segment, index) => ({
-    ...segment,
-    translation: segment.translation ?? segment.text,
-    segment_id: segment.segment_id ?? freshSegmentId(),
-    seed: segment.seed ?? 1234 + index,
-    render_nonce: segment.render_nonce ?? 0,
-  }));
+  const usedIds = new Set<string>();
+  return segments.map((segment, index) => {
+    const requestedId = String(segment.segment_id ?? '').trim();
+    const segmentId = requestedId && !usedIds.has(requestedId) ? requestedId : freshSegmentId();
+    usedIds.add(segmentId);
+    return {
+      ...segment,
+      index,
+      translation: segment.translation ?? segment.text,
+      segment_id: segmentId,
+      seed: segment.seed ?? 1234 + index,
+      render_nonce: segment.render_nonce ?? 0,
+    };
+  });
 }
 
 function cloneSegments(segments: Segment[]): Segment[] {
@@ -109,7 +116,9 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   const [originalGain, setOriginalGain] = useState(0.22);
   const [dubbingGain, setDubbingGain] = useState(1.0);
   const [ducking, setDucking] = useState(0.65);
-  const [editableSegments, setEditableSegments] = useState<Segment[]>(segments);
+  // Stable unique keys must exist on the first render. Assigning them later in
+  // an effect leaves React reconciling a list whose every key was "undefined".
+  const [editableSegments, setEditableSegments] = useState<Segment[]>(() => prepareSegments(segments));
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
