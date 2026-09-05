@@ -9,7 +9,7 @@ przebudowy calego hosta, ale obraz aplikacji powinien zostac przebudowany.
 Na serwer trzeba dostarczyc:
 
 ```text
-nupicai-update-20260905.bundle
+nupicai-update-20260905-v2.bundle
 minidualpath_bins_maskgit_continuity_ep742.pt
 ```
 
@@ -44,7 +44,7 @@ Skopiuj bundle na serwer, a nastepnie:
 ```bash
 cd /srv/nupicai
 git status --short
-git fetch /mnt/pendrive/nupicai-update-20260905.bundle master
+git fetch /mnt/pendrive/nupicai-update-20260905-v2.bundle master
 git merge --ff-only FETCH_HEAD
 ```
 
@@ -58,7 +58,7 @@ zsynchronizuj tylko kod:
 
 ```bash
 rm -rf /tmp/nupicai-update
-git clone /mnt/pendrive/nupicai-update-20260905.bundle /tmp/nupicai-update
+git clone /mnt/pendrive/nupicai-update-20260905-v2.bundle /tmp/nupicai-update
 rsync -a \
   --exclude='.git/' \
   --exclude='.env' \

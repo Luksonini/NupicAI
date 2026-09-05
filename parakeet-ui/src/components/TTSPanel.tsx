@@ -75,6 +75,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
+  const [speechLang, setSpeechLang] = useState(targetLang === 'en' ? 'en' : 'pl');
   const [flowSettings, setFlowSettings] = useState({ mel_steps_first: 8, mel_steps_second: 3, mel_twopass_t_noise: 0.12 });
   const [baseSpeed, setBaseSpeed] = useState(1.0);
   const [maxSpeed, setMaxSpeed] = useState(1.3);
@@ -142,6 +143,10 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   }, [segments]);
 
   useEffect(() => {
+    setSpeechLang(targetLang === 'en' ? 'en' : 'pl');
+  }, [targetLang]);
+
+  useEffect(() => {
     const handleHistoryShortcut = (event: KeyboardEvent) => {
       if (!event.ctrlKey && !event.metaKey) return;
       const target = event.target as HTMLElement | null;
@@ -172,7 +177,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     try {
       const jobId = await submitDub({
         segments: renderSegments, speaker_label: speaker, tts_model_profile: ttsModel,
-        transcribe_job_id: transcribeJobId, reuse_dub_job_id: dubJobId, target_lang: targetLang,
+        transcribe_job_id: transcribeJobId, reuse_dub_job_id: dubJobId, target_lang: speechLang,
         base_speed: baseSpeed, max_adaptive_speed: maxSpeed, extra_tail_sec: 0,
         dur_scale: 1, ...flowSettings,
         digital_silence: true, pause_edge_frames: 10, short_continuity_ms: 0,
@@ -347,6 +352,12 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
           <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)}>
             {speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.display_name ?? item.label}</option>)}
           </select></label>
+          <label><span className="field-label">{locale === 'pl' ? 'Język dubbingu' : 'Dubbing language'}</span>
+            <select value={speechLang} onChange={e => { setSpeechLang(e.target.value); setResult(null); }} disabled={running}>
+              <option value="pl">Polski</option>
+              <option value="en">English</option>
+            </select>
+          </label>
           <label className="upload-button"><Upload size={15} /><span>{t('addVoice')}</span><input type="file" className="sr-only" accept="audio/*,video/*" onChange={e => void addVoicePrompt(e.target.files?.[0] ?? null)} /></label>
           {promptStatus && <p className="mini-success"><CheckCircle2 size={14} />{promptStatus}</p>}
         </section>
