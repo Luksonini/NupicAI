@@ -6,7 +6,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, scrolledtext, ttk
 
 from PIL import Image, ImageDraw
 from pynput import keyboard
@@ -25,8 +25,8 @@ class FlowApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("NupicAI Flow")
-        self.root.geometry("440x430")
-        self.root.minsize(400, 390)
+        self.root.geometry("500x650")
+        self.root.minsize(430, 560)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
         self.config = self._load_config()
         self.api = NupicFlowApi(self.config.get("server_url", "http://127.0.0.1:8765"))
@@ -68,10 +68,19 @@ class FlowApp:
         ttk.Separator(frame).pack(fill="x", pady=4)
         ttk.Checkbutton(frame, text="Poprawiaj tekst przez AI (wolniej)", variable=self.polish_var, command=self._settings_changed).pack(anchor="w", pady=(12, 4))
         ttk.Checkbutton(frame, text="Automatycznie wklejaj do aktywnego okna", variable=self.auto_paste_var, command=self.save_config).pack(anchor="w")
+        self.record_button = ttk.Button(frame, text="Nagraj test", command=self.toggle_recording)
+        self.record_button.pack(fill="x", pady=(14, 0))
         ttk.Label(frame, textvariable=self.status_var, wraplength=390).pack(anchor="w", pady=(18, 8))
         self.progress = ttk.Progressbar(frame, mode="determinate", maximum=100)
         self.progress.pack(fill="x")
-        ttk.Button(frame, text="Ukryj do zasobnika", command=self.hide).pack(fill="x", pady=(18, 0))
+        result_header = ttk.Frame(frame)
+        result_header.pack(fill="x", pady=(16, 5))
+        ttk.Label(result_header, text="Ostatnia transkrypcja", font=("Sans", 10, "bold")).pack(side="left")
+        ttk.Button(result_header, text="Kopiuj", command=self.copy_transcript).pack(side="right")
+        self.transcript_box = scrolledtext.ScrolledText(frame, height=7, wrap="word")
+        self.transcript_box.pack(fill="both", expand=True)
+        self.transcript_box.configure(state="disabled")
+        ttk.Button(frame, text="Ukryj do zasobnika", command=self.hide).pack(fill="x", pady=(14, 0))
 
     @staticmethod
     def _field(parent: ttk.Frame, label: str, variable: tk.StringVar, show: str = "") -> None:
@@ -112,6 +121,7 @@ class FlowApp:
         try:
             self.recorder.start()
             self.root.after(0, lambda: self._set_status("Nagrywam…", 0))
+            self.root.after(0, lambda: self.record_button.configure(text="Zatrzymaj i transkrybuj"))
         except Exception as exc:
             self.root.after(0, lambda message=str(exc): self._show_error(message))
 
@@ -121,6 +131,7 @@ class FlowApp:
         except Exception as exc:
             self.root.after(0, lambda message=str(exc): self._show_error(message))
             return
+        self.root.after(0, lambda: self.record_button.configure(text="Nagraj test"))
         if path is None or self.busy:
             return
         self.busy = True
@@ -148,10 +159,15 @@ class FlowApp:
             self.busy = False
 
     def _deliver_text(self, text: str) -> None:
+        self.transcript_box.configure(state="normal")
+        self.transcript_box.delete("1.0", "end")
+        self.transcript_box.insert("1.0", text)
+        self.transcript_box.configure(state="disabled")
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.root.update_idletasks()
-        if self.auto_paste_var.get() and os.environ.get("XDG_SESSION_TYPE", "x11").lower() == "x11":
+        app_has_focus = self.root.focus_get() is not None
+        if self.auto_paste_var.get() and not app_has_focus and os.environ.get("XDG_SESSION_TYPE", "x11").lower() == "x11":
             def paste() -> None:
                 time.sleep(0.12)
                 controller = keyboard.Controller()
@@ -161,8 +177,22 @@ class FlowApp:
             threading.Thread(target=paste, daemon=True).start()
             self._set_status("Wklejono transkrypcję", 100)
         else:
-            self._set_status("Skopiowano transkrypcję do schowka", 100)
+            self._set_status("Transkrypcja gotowa i skopiowana do schowka", 100)
         self.root.after(1800, lambda: self.progress.configure(value=0))
+
+    def toggle_recording(self) -> None:
+        if self.recorder.recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def copy_transcript(self) -> None:
+        text = self.transcript_box.get("1.0", "end").strip()
+        if not text:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self._set_status("Skopiowano transkrypcję", 100)
 
     def _progress_from_worker(self, message: str, progress: float) -> None:
         self.root.after(0, lambda: self._set_status(message or "Transkrybuję…", progress * 100))

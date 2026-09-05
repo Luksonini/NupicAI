@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
-
 import requests
 
 
@@ -42,7 +40,7 @@ class NupicFlowApi:
     ) -> dict[str, Any]:
         with wav_path.open("rb") as audio:
             response = self.session.post(
-                f"{self.base_url}/transcribe",
+                f"{self.base_url}/dictation/transcribe",
                 files={"file": (wav_path.name, audio, "audio/wav")},
                 timeout=30,
             )
@@ -93,5 +91,6 @@ class NupicFlowApi:
             message = str(response.json().get("detail") or response.reason)
         except Exception:
             message = response.text.strip() or response.reason
-        raise RuntimeError(f"NupicAI HTTP {response.status_code}: {message}")
-
+        retry_after = response.headers.get("Retry-After", "")
+        retry_note = f" Spróbuj ponownie za około {retry_after} s." if retry_after else ""
+        raise RuntimeError(f"NupicAI HTTP {response.status_code}: {message}{retry_note}")

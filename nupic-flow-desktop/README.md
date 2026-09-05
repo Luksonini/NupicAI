@@ -11,6 +11,9 @@ key. The recognized text is pasted into the previously focused application. Unde
 the result is copied to the clipboard because arbitrary synthetic keyboard input is blocked
 by design.
 
+For the first test, keep the window open and use **Nagraj test**. The transcript appears in
+the result field and is copied to the clipboard without being pasted into a settings field.
+
 ```bash
 cd nupic-flow-desktop
 python3 -m venv .venv

@@ -2613,6 +2613,28 @@ async def transcribe(
     return {"job_id": job.id}
 
 
+@app.post("/dictation/transcribe")
+async def transcribe_dictation(
+    request: Request,
+    file: UploadFile = File(...),
+    user: User = Depends(_current_user),
+) -> dict[str, str]:
+    # Dictation consists of many short requests, so it must not share the much
+    # lower upload-page limiter. Account usage remains enforced independently.
+    _enforce_rate_limit(request, "dictation-minute", limit=30, window=60)
+    _enforce_rate_limit(request, "dictation-hour", limit=600, window=3600)
+    suffix = Path(file.filename or "dictation.wav").suffix or ".wav"
+    job = _new_job(user, "dictation")
+    upload_path = _job_work_dir(job) / f"source{suffix}"
+    try:
+        await _save_upload(file, upload_path, max_bytes=min(MAX_UPLOAD_BYTES, 16 * 1024 * 1024))
+    except Exception:
+        _discard_unstarted_job(job)
+        raise
+    _executor.submit(_worker_transcribe, job, upload_path)
+    return {"job_id": job.id}
+
+
 class YoutubeTranscribeRequest(BaseModel):
     url: str
 
@@ -2672,7 +2694,7 @@ async def polish_dictation(
     user: User = Depends(_current_user),
 ) -> dict[str, str]:
     del user
-    _enforce_rate_limit(request, "dictation-polish", limit=120, window=3600)
+    _enforce_rate_limit(request, "dictation-polish", limit=600, window=3600)
     text = str(req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Brak tekstu do poprawienia")
