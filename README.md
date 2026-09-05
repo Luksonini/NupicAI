@@ -211,6 +211,21 @@ sudo systemctl restart nupicai
 
 Dolaczony Deno musi miec wersje co najmniej 2.3. Filmy wymagajace konta konfiguruje sie przez `WEGORZ_YTDLP_COOKIES_FILE` albo `WEGORZ_YTDLP_COOKIES_FROM_BROWSER`. Przy aktywnym wymogu Proof of Origin nalezy wdrozyc utrzymywanego dostawce PO Token i przekazac jego ustawienia przez `WEGORZ_YTDLP_EXTRACTOR_ARGS`; nie nalezy wpisywac recznie tokenu zwiazanego z pojedynczym filmem. Zewnetrzne serwisy typu „YouTube downloader” nie sa fallbackiem produkcyjnym: ujawnialyby adres materialu i nie zapewniaja stabilnego API ani kontroli nad plikiem.
 
+Wiele pobran z jednego publicznego adresu IP moze skonczyc sie `HTTP 429` nawet
+przy aktualnym `yt-dlp`. Aplikacja zachowuje minimalny odstep pomiedzy startami
+pobran i po wykryciu 429 wlacza wspolny cooldown. Steruja tym:
+
+```env
+WEGORZ_YTDLP_MIN_INTERVAL_SECONDS=2
+WEGORZ_YTDLP_429_COOLDOWN_SECONDS=900
+```
+
+Nie omijaj limitu pula rotujacych VPN/proxy. Dla publicznego SaaS niezawodna
+sciezka podstawowa to bezposredni upload materialu, do ktorego uzytkownik ma
+prawa. Import URL jest funkcja wygodna i moze byc czasowo niedostepny. Wspolne
+cookies serwisowego konta maja ryzyko wygasniecia lub blokady; przechowuj je poza
+repozytorium, montuj tylko do odczytu i nie udostepniaj ich uzytkownikom.
+
 ## Płatności ze ZróbEbooka
 
 ZróbEbooka zawiera dzialajace klocki PayU, BTCPay, historie transakcji oraz naliczanie sekund. NupicAI moze wykorzystac te same konta operatorow i podobny interfejs, ale kodu nie nalezy kopiowac bez zmian, ponieważ aplikacje maja inny backend, a stara sciezka tworzenia zamowienia przyjmuje cene i wielkosc pakietu z przegladarki.

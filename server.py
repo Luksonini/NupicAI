@@ -90,6 +90,12 @@ ADMIN_EMAILS = tuple(
 SECURE_COOKIES = os.environ.get("NUPICAI_SECURE_COOKIES", "0").strip().lower() in {"1", "true", "yes", "on"}
 MAX_UPLOAD_BYTES = max(1, int(os.environ.get("NUPICAI_MAX_UPLOAD_MB", "1024"))) * 1024 * 1024
 MAX_VOICE_PROMPT_BYTES = max(1, int(os.environ.get("NUPICAI_MAX_VOICE_PROMPT_MB", "100"))) * 1024 * 1024
+YTDLP_MIN_INTERVAL_SECONDS = max(
+    0.0, float(os.environ.get("WEGORZ_YTDLP_MIN_INTERVAL_SECONDS", "2.0"))
+)
+YTDLP_429_COOLDOWN_SECONDS = max(
+    60.0, float(os.environ.get("WEGORZ_YTDLP_429_COOLDOWN_SECONDS", "900"))
+)
 PUBLIC_SITE_URL = os.environ.get(
     "NUPICAI_PUBLIC_URL", os.environ.get("NEXT_PUBLIC_SITE_URL", "http://localhost:8765")
 ).strip().rstrip("/")
@@ -1498,8 +1504,47 @@ def _yt_dlp_extra_args() -> list[str]:
     return args
 
 
+_youtube_request_lock = threading.Lock()
+_youtube_last_request_at = 0.0
+_youtube_cooldown_until = 0.0
+
+
+def _youtube_cooldown_remaining() -> float:
+    with _youtube_request_lock:
+        return max(0.0, _youtube_cooldown_until - time.monotonic())
+
+
+def _youtube_wait_for_request_slot() -> None:
+    global _youtube_last_request_at
+    with _youtube_request_lock:
+        now = time.monotonic()
+        if _youtube_cooldown_until > now:
+            raise RuntimeError(
+                "YouTube tymczasowo ograniczył serwer. Spróbuj później albo prześlij plik bezpośrednio."
+            )
+        wait_seconds = YTDLP_MIN_INTERVAL_SECONDS - (now - _youtube_last_request_at)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        _youtube_last_request_at = time.monotonic()
+
+
+def _youtube_start_rate_limit_cooldown() -> None:
+    global _youtube_cooldown_until
+    with _youtube_request_lock:
+        _youtube_cooldown_until = max(
+            _youtube_cooldown_until,
+            time.monotonic() + YTDLP_429_COOLDOWN_SECONDS,
+        )
+
+
 def _yt_dlp_error_message(details: str) -> tuple[str, bool]:
     value = details.lower()
+    if any(text in value for text in ("http error 429", "too many requests")):
+        return (
+            "YouTube tymczasowo ograniczył adres serwera (HTTP 429). "
+            "Spróbuj później albo prześlij plik bezpośrednio.",
+            False,
+        )
     if any(text in value for text in ("private video", "video unavailable", "has been removed")):
         return "Film jest prywatny, usunięty albo niedostępny.", False
     if any(text in value for text in ("not available in your country", "geo restricted", "geographic restriction")):
@@ -1549,6 +1594,7 @@ def _download_youtube_video(
             "-o", out_template,
             str(url),
         ]
+        _youtube_wait_for_request_slot()
         result = subprocess.run(cmd, check=False, text=True, capture_output=True)
         details = f"{result.stdout}\n{result.stderr}".strip()
         diagnostics.append(f"=== Próba {attempt_index}: {label} ===\n{details}\n")
@@ -1564,6 +1610,8 @@ def _download_youtube_video(
         for candidate in candidates:
             candidate.unlink(missing_ok=True)
         final_message, retryable = _yt_dlp_error_message(details)
+        if "http error 429" in details.lower() or "too many requests" in details.lower():
+            _youtube_start_rate_limit_cooldown()
         if not retryable:
             break
     (work_dir / "yt_dlp_attempts.log").write_text("\n".join(diagnostics), encoding="utf-8")
@@ -2572,6 +2620,16 @@ async def transcribe_youtube(
     user: User = Depends(_current_user),
 ) -> dict[str, str]:
     _enforce_rate_limit(request, "youtube", limit=20, window=3600)
+    cooldown = _youtube_cooldown_remaining()
+    if cooldown > 0:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "YouTube tymczasowo ograniczył serwer. "
+                f"Spróbuj ponownie za około {max(1, int(cooldown / 60) + 1)} min albo prześlij plik."
+            ),
+            headers={"Retry-After": str(max(1, int(cooldown)))},
+        )
     url = str(req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Brak URL YouTube")

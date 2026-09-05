@@ -145,6 +145,12 @@ class PipelineIntegrityTests(unittest.TestCase):
             self.assertIsNone(store.create_password_reset("missing@example.com"))
 
     def test_youtube_errors_are_classified_for_actionable_feedback(self) -> None:
+        message, retryable = server._yt_dlp_error_message(
+            "HTTP Error 429: Too Many Requests; Sign in to confirm you're not a bot"
+        )
+        self.assertFalse(retryable)
+        self.assertIn("429", message)
+        self.assertIn("prześlij plik", message)
         message, retryable = server._yt_dlp_error_message("HTTP Error 403: Forbidden")
         self.assertTrue(retryable)
         self.assertIn("403", message)
