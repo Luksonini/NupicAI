@@ -508,6 +508,8 @@ def _check_numbered_indices(parsed: dict[int, str], expected: list[int]) -> dict
 def _translate_api_numbered(
     segments: list[dict[str, Any]],
     *,
+    source_lang: str,
+    target_lang: str,
     api_key: str,
     endpoint: str,
     model: str,
@@ -519,8 +521,8 @@ def _translate_api_numbered(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not api_key:
         raise RuntimeError("Brak API key. Podaj w UI albo ustaw NUPIC_API_KEY.")
-    target_lang = str((_CONFIG or {}).get("translation_target_lang", "pl")).lower().strip()
-    source_lang = str((_CONFIG or {}).get("translation_source_lang", "auto")).lower().strip()
+    target_lang = str(target_lang or "pl").lower().strip()
+    source_lang = str(source_lang or "auto").lower().strip()
     lang_names = {
         "auto": "the source language detected from the transcript",
         "en": "English",
@@ -531,6 +533,8 @@ def _translate_api_numbered(
         "it": "Italian",
         "uk": "Ukrainian",
         "ru": "Russian",
+        "hi": "Hindi (possibly romanized in Latin script)",
+        "ur": "Urdu (possibly romanized in Latin script)",
     }
     source_name = lang_names.get(source_lang, source_lang.upper())
     if target_lang == "en":
@@ -545,6 +549,9 @@ def _translate_api_numbered(
         abbrev_note = "For Polish TTS, prefer Polish spoken letter forms for unclear acronyms when natural, for example AAA -> a a a, CNN -> ce en en, API -> a pe i, i.e. -> to znaczy."
     system = (
         f"You are a precise {direction} translator for dubbing/TTS. "
+        "When the source language is automatic, infer the actual spoken language from the complete transcript. "
+        "The transcript may be phonetic, romanized, or transliterated (for example Hindi or Urdu written in Latin script); "
+        "do not assume it is English merely because it uses Latin letters or the ASR labelled it as English. "
         "The input is an automatic speech transcription from audio, so it can contain ASR mistakes, broken boundaries, "
         "wrong casing, homophones, and misrecognized names. "
         "Translate each numbered input segment into exactly one numbered output segment. "
@@ -662,6 +669,8 @@ def _translate_api_numbered(
 def _translate_api_json_overlap(
     segments: list[dict[str, Any]],
     *,
+    source_lang: str,
+    target_lang: str,
     api_key: str,
     endpoint: str,
     model: str,
@@ -673,8 +682,8 @@ def _translate_api_json_overlap(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not api_key:
         raise RuntimeError("Brak API key. Podaj w UI albo ustaw NUPIC_API_KEY.")
-    target_lang = str((_CONFIG or {}).get("translation_target_lang", "pl")).lower().strip()
-    source_lang = str((_CONFIG or {}).get("translation_source_lang", "auto")).lower().strip()
+    target_lang = str(target_lang or "pl").lower().strip()
+    source_lang = str(source_lang or "auto").lower().strip()
     lang_names = {
         "auto": "the source language detected from the transcript",
         "en": "English",
@@ -685,6 +694,8 @@ def _translate_api_json_overlap(
         "it": "Italian",
         "uk": "Ukrainian",
         "ru": "Russian",
+        "hi": "Hindi (possibly romanized in Latin script)",
+        "ur": "Urdu (possibly romanized in Latin script)",
     }
     source_name = lang_names.get(source_lang, source_lang.upper())
     if target_lang == "en":
@@ -697,6 +708,9 @@ def _translate_api_json_overlap(
         abbrev_note = "For Polish TTS, prefer Polish spoken letter forms for unclear acronyms when natural, for example AAA -> a a a, CNN -> ce en en, API -> a pe i, i.e. -> to znaczy."
     system = (
         f"You are a precise {direction} translator for dubbing. "
+        "When the source language is automatic, infer the actual spoken language from the complete transcript. "
+        "The transcript may be phonetic, romanized, or transliterated (for example Hindi or Urdu written in Latin script); "
+        "do not assume it is English merely because it uses Latin letters or the ASR labelled it as English. "
         "The input is an automatic speech transcription from audio, so it can contain ASR mistakes, broken boundaries, "
         "wrong casing, homophones, and misrecognized names. "
         "Translate only the items in the JSON field segments. "
@@ -848,9 +862,9 @@ def _translate_api_json_overlap(
     return translated, {"mode": "api_json_overlap", "model": model, "target_lang": target_lang, "chunks": meta_chunks, "context_overlap_segments": 1}
 
 
-def _translate_local_wegorz(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _translate_local_wegorz(segments: list[dict[str, Any]], *, target_lang: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     assert _CONFIG is not None
-    if str(_CONFIG.get("translation_target_lang", "pl")).lower().strip() != "pl":
+    if str(target_lang or "pl").lower().strip() != "pl":
         raise RuntimeError("Lokalny Węgorz w tym pipeline obsługuje tylko EN->PL. Dla PL->EN wybierz Qwen/API numbered.")
     ckpt = _resolve_path(_CONFIG["wegorz_ckpt"])
     tokenizer = _resolve_path(_CONFIG["wegorz_tokenizer"])
@@ -957,6 +971,8 @@ def _translate_local_wegorz(segments: list[dict[str, Any]]) -> tuple[list[dict[s
 def translate_segments_to_pl(
     *,
     segments: list[dict[str, Any]],
+    source_lang: str = "auto",
+    target_lang: str = "pl",
     api_key: str,
     endpoint: str,
     model: str,
@@ -971,10 +987,12 @@ def translate_segments_to_pl(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     del break_token, batch_seconds
     if str(mode) == "wegorz_local_sentence_split":
-        return _translate_local_wegorz(segments)
+        return _translate_local_wegorz(segments, target_lang=target_lang)
     if str(mode) in {"api_json_overlap", "qwen_mtp_json_overlap", "qwen_mtp_35b_json_overlap"}:
         return _translate_api_json_overlap(
             segments,
+            source_lang=source_lang,
+            target_lang=target_lang,
             api_key=api_key,
             endpoint=endpoint,
             model=model,
@@ -986,6 +1004,8 @@ def translate_segments_to_pl(
         )
     return _translate_api_numbered(
         segments,
+        source_lang=source_lang,
+        target_lang=target_lang,
         api_key=api_key,
         endpoint=endpoint,
         model=model,

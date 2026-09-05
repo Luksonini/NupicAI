@@ -1663,11 +1663,6 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
             or os.environ.get(env_key_name, "").strip()
             or str(core._CONFIG.get("translation_api_key", "")).strip()
         )
-        core._CONFIG.update({
-            "translation_source_lang": req.source_lang,
-            "translation_target_lang": req.target_lang,
-        })
-
         t0 = time.perf_counter()
         n = len(req.segments)
         _push(job, {"type": "progress", "progress": 0.1,
@@ -1694,6 +1689,8 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
 
         translated, meta = core.translate_segments_to_pl(
             segments=list(req.segments),
+            source_lang=req.source_lang,
+            target_lang=req.target_lang,
             api_key=key,
             endpoint=str(core._CONFIG.get("translation_endpoint", "")),
             model=selected_model,

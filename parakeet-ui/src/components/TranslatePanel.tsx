@@ -31,7 +31,7 @@ export default function TranslatePanel({ segments, sourceLang, onDone, onContinu
   const { locale, t } = useLocale();
   const pastedMode = segments.length === 0;
   const [inputText, setInputText] = useState('');
-  const [inputSourceLang, setInputSourceLang] = useState(sourceLang || 'en');
+  const [inputSourceLang, setInputSourceLang] = useState('auto');
   const [targetLang, setTargetLang] = useState(() => sourceLang.toLowerCase().startsWith('pl') ? 'en' : 'pl');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -41,7 +41,7 @@ export default function TranslatePanel({ segments, sourceLang, onDone, onContinu
 
   const run = async () => {
     const sourceSegments = pastedMode ? pastedSegments(inputText) : segments;
-    const activeSourceLang = pastedMode ? inputSourceLang : sourceLang;
+    const activeSourceLang = inputSourceLang;
     if (!sourceSegments.length) return;
     setRunning(true); setError(''); setProgress(0); setMessage('Przygotowuję tłumaczenie…');
     try {
@@ -78,13 +78,15 @@ export default function TranslatePanel({ segments, sourceLang, onDone, onContinu
       <div className="section-toolbar">
         <div className="panel-heading compact"><span className="icon-box"><Languages size={18} /></span><div><h2>{t('translate')}</h2><p>{pastedMode ? (locale === 'pl' ? 'Wklej tekst bez pliku audio' : 'Paste text without an audio file') : `${segments.length} ${locale === 'pl' ? 'segmentów' : 'segments'}`}</p></div></div>
         <div className="toolbar-actions">
-          {pastedMode && <label className="inline-field"><span>{locale === 'pl' ? 'Język źródłowy' : 'Source language'}</span>
+          <label className="inline-field"><span>{locale === 'pl' ? 'Język źródłowy' : 'Source language'}</span>
             <select value={inputSourceLang} onChange={e => setInputSourceLang(e.target.value)} disabled={running || !!result}>
+              <option value="auto">{locale === 'pl' ? `Automatycznie${!pastedMode && sourceLang ? ` (ASR: ${sourceLang.toUpperCase()})` : ''}` : `Automatic${!pastedMode && sourceLang ? ` (ASR: ${sourceLang.toUpperCase()})` : ''}`}</option>
               <option value="pl">Polski</option><option value="en">English</option><option value="de">Deutsch</option>
               <option value="fr">Français</option><option value="es">Español</option><option value="it">Italiano</option>
               <option value="uk">Українська</option><option value="ru">Русский</option>
+              <option value="hi">Hindi (romanized)</option><option value="ur">Urdu (romanized)</option>
             </select>
-          </label>}
+          </label>
           <label className="inline-field"><span>{t('targetLanguage')}</span>
             <select value={targetLang} onChange={e => setTargetLang(e.target.value)} disabled={running || !!result}>
               <option value="pl">Polski</option><option value="en">English</option>
@@ -111,7 +113,7 @@ export default function TranslatePanel({ segments, sourceLang, onDone, onContinu
             <div className="ml-auto flex gap-2">
               <button className="icon-button" title={t('copy')} onClick={() => navigator.clipboard.writeText(result.translation)}><Copy size={16} /></button>
               <button className="icon-button" title={t('downloadSrt')} onClick={exportSrt}><Download size={16} /></button>
-              {pastedMode && <button className="icon-button" title={locale === 'pl' ? 'Nowe tłumaczenie' : 'New translation'} onClick={() => { setResult(null); setError(''); }}><RotateCcw size={16} /></button>}
+              <button className="icon-button" title={locale === 'pl' ? 'Zmień języki lub przetłumacz ponownie' : 'Change languages or translate again'} onClick={() => { setResult(null); setError(''); }}><RotateCcw size={16} /></button>
               {onContinue && <button className="button button-primary" onClick={onContinue}>{t('goDubbing')} <ArrowRight size={16} /></button>}
             </div>
           </div>

@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -12,9 +13,30 @@ import soundfile as sf
 
 import server
 from auth_store import AuthStore, QuotaExceeded, User
+from translate import parakeet_translation_core as translation_core
 
 
 class PipelineIntegrityTests(unittest.TestCase):
+    def test_auto_translation_prompt_handles_romanized_speech_without_global_language_state(self) -> None:
+        response = json.dumps({"segments": [{"id": 1, "translation": "Przetłumaczony tekst."}]})
+        with mock.patch.object(translation_core, "_call_chat_json_api", return_value=response) as api_call:
+            translated, _ = translation_core.translate_segments_to_pl(
+                segments=[{"index": 0, "text": "ye automatically pani ko apne andar samana shuru kar dete"}],
+                source_lang="auto",
+                target_lang="pl",
+                api_key="test-key",
+                endpoint="https://example.invalid/v1/chat/completions",
+                model="test-model",
+                mode="api_json_overlap",
+                batch_segments=8,
+            )
+        self.assertEqual(translated[0]["text"], "Przetłumaczony tekst.")
+        messages = api_call.call_args.kwargs["messages"]
+        self.assertIn("romanized", messages[0]["content"])
+        payload = json.loads(messages[-1]["content"].removeprefix("/no_think\n"))
+        self.assertEqual(payload["source_language"], "the source language detected from the transcript")
+        self.assertEqual(payload["target_language"], "Polish")
+
     def test_maskgit_continuity_profile_is_packaged_and_scoped(self) -> None:
         profile, checkpoint = server._resolve_tts_profile("maskgit_continuity")
         self.assertEqual(profile, "maskgit_continuity")
