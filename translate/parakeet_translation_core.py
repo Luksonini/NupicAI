@@ -1031,6 +1031,46 @@ def translate_segments_to_pl(
     )
 
 
+def polish_dictation_text(
+    *,
+    text: str,
+    language: str,
+    api_key: str,
+    endpoint: str,
+    model: str,
+    timeout: float = 90.0,
+) -> str:
+    """Lightly clean a dictation without translating or changing its meaning."""
+    value = " ".join(str(text or "").strip().split())
+    if not value:
+        return ""
+    if not api_key:
+        raise RuntimeError("Brak klucza API do opcjonalnej korekty tekstu")
+    language_hint = str(language or "auto").strip().lower()
+    response = _call_chat_text_api(
+        endpoint=endpoint,
+        api_key=api_key,
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You clean speech dictation for immediate insertion into the active text field. "
+                    f"The ASR language hint is {language_hint}; preserve the original language. "
+                    "Add punctuation and capitalization, remove only obvious filler repetitions and false starts, "
+                    "and fix only unambiguous speech-recognition errors. Preserve meaning, names, numbers, technical "
+                    "terms, tone and level of formality. Never translate, summarize, answer, explain, or add facts. "
+                    "Return only the cleaned text as plain text without Markdown or quotation marks."
+                ),
+            },
+            {"role": "user", "content": "/no_think\n" + value},
+        ],
+        temperature=0.0,
+        timeout=timeout,
+    ).strip()
+    return response or value
+
+
 def _load_manifest_speaker_choices(lang: str) -> list[str]:
     assert _CONFIG is not None
     manifest = Path(str(_CONFIG.get("tts_dataset_json", TTS_DIR / "manifest_runtime_refs.json")))

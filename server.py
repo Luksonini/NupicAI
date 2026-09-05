@@ -1649,6 +1649,11 @@ class TranslateRequest(BaseModel):
     batch_segments: int = 0
 
 
+class DictationPolishRequest(BaseModel):
+    text: str
+    language: str = "auto"
+
+
 def _worker_translate(job: Job, req: TranslateRequest) -> None:
     try:
         job.status = "running"
@@ -2658,6 +2663,37 @@ async def translate(
     job = _new_job(user, "translate")
     _executor.submit(_worker_translate, job, req)
     return {"job_id": job.id}
+
+
+@app.post("/dictation/polish")
+async def polish_dictation(
+    req: DictationPolishRequest,
+    request: Request,
+    user: User = Depends(_current_user),
+) -> dict[str, str]:
+    del user
+    _enforce_rate_limit(request, "dictation-polish", limit=120, window=3600)
+    text = str(req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Brak tekstu do poprawienia")
+    if len(text) > 12_000:
+        raise HTTPException(status_code=413, detail="Tekst dyktowania jest zbyt długi")
+    model = str(core._CONFIG.get("translation_model", "qwen3.5:35b-mtp"))
+    env_key_name = "GEMINI_API_KEY" if model.startswith("gemini") else "NUPIC_API_KEY"
+    key = os.environ.get(env_key_name, "").strip() or str(core._CONFIG.get("translation_api_key", "")).strip()
+    try:
+        polished = await asyncio.to_thread(
+            core.polish_dictation_text,
+            text=text,
+            language=req.language,
+            api_key=key,
+            endpoint=str(core._CONFIG.get("translation_endpoint", "")),
+            model=model,
+            timeout=min(120.0, float(core._CONFIG.get("translation_timeout_seconds", 600))),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Korekta tekstu nie powiodła się: {exc}") from exc
+    return {"text": polished}
 
 
 @app.get("/jobs/{job_id}")

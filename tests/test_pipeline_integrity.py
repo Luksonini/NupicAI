@@ -17,6 +17,23 @@ from translate import parakeet_translation_core as translation_core
 
 
 class PipelineIntegrityTests(unittest.TestCase):
+    def test_dictation_polish_preserves_language_and_uses_deterministic_request(self) -> None:
+        with mock.patch.object(
+            translation_core,
+            "_call_chat_text_api",
+            return_value="To jest poprawiony tekst.",
+        ) as api_call:
+            result = translation_core.polish_dictation_text(
+                text="to jest poprawiony tekst",
+                language="pl",
+                api_key="test-key",
+                endpoint="https://example.invalid/v1/chat/completions",
+                model="test-model",
+            )
+        self.assertEqual(result, "To jest poprawiony tekst.")
+        self.assertEqual(api_call.call_args.kwargs["temperature"], 0.0)
+        self.assertIn("preserve the original language", api_call.call_args.kwargs["messages"][0]["content"])
+
     def test_auto_translation_prompt_handles_romanized_speech_without_global_language_state(self) -> None:
         response = json.dumps({"segments": [{"id": 1, "translation": "Przetłumaczony tekst."}]})
         with mock.patch.object(translation_core, "_call_chat_json_api", return_value=response) as api_call:
