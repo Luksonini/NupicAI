@@ -4,6 +4,7 @@ const { listen } = window.__TAURI__.event;
 const elements = {
   record: document.querySelector('#record'),
   status: document.querySelector('#status'),
+  shortcut: document.querySelector('#shortcut'),
   wave: document.querySelector('#wave'),
   result: document.querySelector('#result'),
   transcript: document.querySelector('#transcript'),
