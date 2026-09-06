@@ -1,8 +1,9 @@
 mod api;
 mod audio;
 mod config;
+mod vad;
 
-use audio::{AudioRecorder, RecordingStatus};
+use audio::{encode_wav, AudioRecorder, RecordingStatus};
 use config::AppSettings;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use serde::Serialize;
@@ -20,6 +21,8 @@ struct AppState {
     settings: Mutex<AppSettings>,
     recorder: Mutex<AudioRecorder>,
     processing: AtomicBool,
+    continuous: AtomicBool,
+    shortcut_down: AtomicBool,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +40,7 @@ struct FlowEvent {
     phase: String,
     message: String,
     transcript: Option<String>,
+    append: bool,
 }
 
 fn state_error() -> String {
@@ -121,6 +125,12 @@ fn save_settings(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<(), String> {
+    if !matches!(
+        settings.activation_mode.as_str(),
+        "hold" | "toggle" | "continuous"
+    ) {
+        return Err("Nieprawidłowy tryb aktywacji".into());
+    }
     register_shortcut(&app, &settings.shortcut)?;
     config::save(&settings)?;
     *state.settings.lock().map_err(|_| state_error())? = settings;
@@ -172,36 +182,7 @@ async fn stop_and_transcribe_inner(app: AppHandle) -> Result<api::TranscriptResu
             .lock()
             .map_err(|_| state_error())?
             .stop_wav()?;
-        let settings = state.settings.lock().map_err(|_| state_error())?.clone();
-        let token =
-            config::load_session().ok_or_else(|| "Zaloguj się w ustawieniach".to_string())?;
-        emit_phase(&app, "processing", "Transkrybuję…", None);
-        let mut transcript = api::transcribe(&settings.server_url, &token, wav)
-            .await
-            .map_err(|error| error.to_string())?;
-        if transcript.transcript.is_empty() {
-            return Err("Nie rozpoznano żadnego tekstu. Sprawdź poziom mikrofonu.".into());
-        }
-        if settings.polish {
-            emit_phase(&app, "processing", "Poprawiam tekst…", None);
-            if let Ok(polished) = api::polish(
-                &settings.server_url,
-                &token,
-                &transcript.transcript,
-                &transcript.detected_language,
-            )
-            .await
-            {
-                transcript.transcript = polished;
-            }
-        }
-        app.clipboard()
-            .write_text(transcript.transcript.clone())
-            .map_err(|error| error.to_string())?;
-        if settings.auto_paste && !main_window_focused(&app) {
-            let _ = paste_clipboard();
-        }
-        Ok(transcript)
+        transcribe_wav(&app, wav, false).await
     }
     .await;
     state.processing.store(false, Ordering::SeqCst);
@@ -225,10 +206,9 @@ async fn stop_and_transcribe(app: AppHandle) -> Result<api::TranscriptResult, St
 
 #[tauri::command]
 fn cancel_recording(state: State<'_, AppState>) -> Result<(), String> {
+    state.continuous.store(false, Ordering::SeqCst);
     let mut recorder = state.recorder.lock().map_err(|_| state_error())?;
-    if recorder.status().recording {
-        let _ = recorder.stop_wav();
-    }
+    recorder.cancel();
     Ok(())
 }
 
@@ -239,8 +219,164 @@ fn emit_phase(app: &AppHandle, phase: &str, message: &str, transcript: Option<St
             phase: phase.into(),
             message: message.into(),
             transcript,
+            append: phase == "phrase",
         },
     );
+}
+
+async fn transcribe_wav(
+    app: &AppHandle,
+    wav: Vec<u8>,
+    continuous: bool,
+) -> Result<api::TranscriptResult, String> {
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().map_err(|_| state_error())?.clone();
+    let token = config::load_session().ok_or_else(|| "Zaloguj się w ustawieniach".to_string())?;
+    emit_phase(app, "processing", "Transkrybuję…", None);
+    let mut transcript = api::transcribe(&settings.server_url, &token, wav)
+        .await
+        .map_err(|error| error.to_string())?;
+    if transcript.transcript.trim().is_empty() {
+        return Err("Nie rozpoznano żadnego tekstu. Sprawdź poziom mikrofonu.".into());
+    }
+    if settings.polish {
+        emit_phase(app, "processing", "Poprawiam tekst…", None);
+        if let Ok(polished) = api::polish(
+            &settings.server_url,
+            &token,
+            &transcript.transcript,
+            &transcript.detected_language,
+        )
+        .await
+        {
+            transcript.transcript = polished;
+        }
+    }
+    let clipboard_text = if continuous {
+        format!("{} ", transcript.transcript.trim())
+    } else {
+        transcript.transcript.clone()
+    };
+    app.clipboard()
+        .write_text(clipboard_text)
+        .map_err(|error| error.to_string())?;
+    if settings.auto_paste && !main_window_focused(app) {
+        let _ = paste_clipboard();
+    }
+    Ok(transcript)
+}
+
+fn start_continuous_inner(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if config::load_session().is_none() {
+        return Err("Zaloguj się w ustawieniach".into());
+    }
+    if state
+        .continuous
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(());
+    }
+    if let Err(error) = start_recording_inner(&state) {
+        state.continuous.store(false, Ordering::SeqCst);
+        return Err(error);
+    }
+    emit_phase(app, "listening", "Nasłuchuję", None);
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move { continuous_loop(handle).await });
+    Ok(())
+}
+
+#[tauri::command]
+fn start_continuous(app: AppHandle) -> Result<(), String> {
+    start_continuous_inner(&app)
+}
+
+#[tauri::command]
+fn stop_continuous(app: AppHandle) {
+    app.state::<AppState>()
+        .continuous
+        .store(false, Ordering::SeqCst);
+    emit_phase(&app, "processing", "Kończę ostatnią frazę…", None);
+}
+
+async fn continuous_loop(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let mut vad = match vad::VoiceActivityDetector::new() {
+        Ok(vad) => vad,
+        Err(error) => {
+            state.continuous.store(false, Ordering::SeqCst);
+            if let Ok(mut recorder) = state.recorder.lock() {
+                recorder.cancel();
+            }
+            emit_phase(
+                &app,
+                "error",
+                &format!("Nie można uruchomić VAD: {error}"),
+                None,
+            );
+            return;
+        }
+    };
+
+    while state.continuous.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(64)).await;
+        let drained = state
+            .recorder
+            .lock()
+            .map_err(|_| state_error())
+            .and_then(|mut recorder| recorder.drain_samples());
+        let (samples, sample_rate) = match drained {
+            Ok(value) => value,
+            Err(error) => {
+                emit_phase(&app, "error", &error, None);
+                break;
+            }
+        };
+        if samples.is_empty() {
+            continue;
+        }
+        let update = match vad.push(&samples, sample_rate) {
+            Ok(update) => update,
+            Err(error) => {
+                emit_phase(&app, "error", &format!("Błąd VAD: {error}"), None);
+                break;
+            }
+        };
+        if update.speech_started {
+            emit_phase(&app, "recording", "Słucham…", None);
+        }
+        for utterance in update.utterances {
+            process_continuous_utterance(&app, utterance).await;
+            if state.continuous.load(Ordering::SeqCst) {
+                emit_phase(&app, "listening", "Nasłuchuję", None);
+            }
+        }
+    }
+
+    if let Some(utterance) = vad.finish() {
+        process_continuous_utterance(&app, utterance).await;
+    }
+    if let Ok(mut recorder) = state.recorder.lock() {
+        recorder.cancel();
+    }
+    state.continuous.store(false, Ordering::SeqCst);
+    emit_phase(&app, "idle", "Gotowy do dyktowania", None);
+}
+
+async fn process_continuous_utterance(app: &AppHandle, utterance: Vec<f32>) {
+    let state = app.state::<AppState>();
+    state.processing.store(true, Ordering::SeqCst);
+    let result = match encode_wav(&utterance) {
+        Ok(wav) => transcribe_wav(app, wav, true).await,
+        Err(error) => Err(error),
+    };
+    state.processing.store(false, Ordering::SeqCst);
+    match result {
+        Ok(transcript) => emit_phase(app, "phrase", "Fraza gotowa", Some(transcript.transcript)),
+        Err(error) => emit_phase(app, "error", &error, None),
+    }
 }
 
 fn main_window_focused(app: &AppHandle) -> bool {
@@ -321,36 +457,15 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _, event| match event.state() {
-                    ShortcutState::Pressed => {
-                        let state = app.state::<AppState>();
-                        match start_recording_inner(&state) {
-                            Ok(()) => emit_phase(app, "recording", "Mów teraz", None),
-                            Err(error) => emit_phase(app, "error", &error, None),
-                        }
-                    }
-                    ShortcutState::Released => {
-                        let handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let result = stop_and_transcribe_inner(handle.clone()).await;
-                            match result {
-                                Ok(transcript) => emit_phase(
-                                    &handle,
-                                    "done",
-                                    "Tekst gotowy",
-                                    Some(transcript.transcript),
-                                ),
-                                Err(error) => emit_phase(&handle, "error", &error, None),
-                            }
-                        });
-                    }
-                })
+                .with_handler(handle_shortcut)
                 .build(),
         )
         .manage(AppState {
             settings: Mutex::new(config::load()),
             recorder: Mutex::new(AudioRecorder::default()),
             processing: AtomicBool::new(false),
+            continuous: AtomicBool::new(false),
+            shortcut_down: AtomicBool::new(false),
         })
         .setup(|app| {
             install_tray(app)?;
@@ -380,8 +495,77 @@ pub fn run() {
             start_recording,
             recording_status,
             stop_and_transcribe,
+            start_continuous,
+            stop_continuous,
             cancel_recording,
         ])
         .run(tauri::generate_context!())
         .expect("NupicAI Flow failed to start");
+}
+
+fn handle_shortcut(
+    app: &AppHandle,
+    _: &tauri_plugin_global_shortcut::Shortcut,
+    event: tauri_plugin_global_shortcut::ShortcutEvent,
+) {
+    let state = app.state::<AppState>();
+    match event.state() {
+        ShortcutState::Pressed => {
+            if state.shortcut_down.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let mode = state
+                .settings
+                .lock()
+                .map(|settings| settings.activation_mode.clone())
+                .unwrap_or_else(|_| "hold".into());
+            if mode == "continuous" {
+                if state.continuous.load(Ordering::SeqCst) {
+                    stop_continuous(app.clone());
+                } else if let Err(error) = start_continuous_inner(app) {
+                    emit_phase(app, "error", &error, None);
+                }
+                return;
+            }
+            let is_recording = state
+                .recorder
+                .lock()
+                .map(|recorder| recorder.status().recording)
+                .unwrap_or(false);
+            if mode == "toggle" && is_recording {
+                spawn_stop_and_transcribe(app.clone());
+            } else if !is_recording {
+                match start_recording_inner(&state) {
+                    Ok(()) => emit_phase(app, "recording", "Mów teraz", None),
+                    Err(error) => emit_phase(app, "error", &error, None),
+                }
+            }
+        }
+        ShortcutState::Released => {
+            state.shortcut_down.store(false, Ordering::SeqCst);
+            let hold = state
+                .settings
+                .lock()
+                .map(|settings| settings.activation_mode == "hold")
+                .unwrap_or(true);
+            let is_recording = state
+                .recorder
+                .lock()
+                .map(|recorder| recorder.status().recording)
+                .unwrap_or(false);
+            if hold && is_recording {
+                spawn_stop_and_transcribe(app.clone());
+            }
+        }
+    }
+}
+
+fn spawn_stop_and_transcribe(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let result = stop_and_transcribe_inner(app.clone()).await;
+        match result {
+            Ok(transcript) => emit_phase(&app, "done", "Tekst gotowy", Some(transcript.transcript)),
+            Err(error) => emit_phase(&app, "error", &error, None),
+        }
+    });
 }

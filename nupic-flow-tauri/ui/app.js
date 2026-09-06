@@ -22,6 +22,7 @@ const elements = {
   password: document.querySelector('#password'),
   inputDevice: document.querySelector('#input-device'),
   inputSources: document.querySelectorAll('input[name="input-source"]'),
+  activationModes: document.querySelectorAll('input[name="activation-mode"]'),
   microphoneDeviceRow: document.querySelector('#microphone-device-row'),
   hotkey: document.querySelector('#hotkey'),
   autoPaste: document.querySelector('#auto-paste'),
@@ -33,13 +34,27 @@ let recording = false;
 let processing = false;
 let authenticated = false;
 let transcript = '';
+let continuous = false;
+let activationMode = 'hold';
 
 function setStatus(message, phase = 'idle') {
   elements.status.textContent = message;
   elements.status.classList.toggle('error', phase === 'error');
   document.body.classList.toggle('recording', phase === 'recording');
   elements.wave.classList.toggle('active', phase === 'recording');
+  elements.wave.classList.toggle('listening', phase === 'listening');
   elements.wave.classList.toggle('processing', phase === 'processing');
+}
+
+function renderShortcut(shortcut) {
+  const parts = String(shortcut || '').split('+').map(part => part.trim()).filter(Boolean);
+  elements.shortcut.replaceChildren();
+  parts.forEach((part, index) => {
+    if (index) elements.shortcut.append(document.createTextNode('+'));
+    const key = document.createElement('kbd');
+    key.textContent = part;
+    elements.shortcut.append(key);
+  });
 }
 
 function setAuthenticated(user) {
@@ -94,6 +109,10 @@ async function load() {
     elements.serverUrl.value = settings.server_url;
     elements.email.value = settings.email;
     elements.hotkey.value = settings.shortcut;
+    renderShortcut(settings.shortcut);
+    activationMode = settings.activation_mode || 'hold';
+    const activation = [...elements.activationModes].find(input => input.value === activationMode);
+    if (activation) activation.checked = true;
     const source = [...elements.inputSources].find(input => input.value === settings.input_source);
     if (source) source.checked = true;
     syncInputSource();
@@ -117,6 +136,13 @@ async function beginRecording() {
     return;
   }
   try {
+    if (activationMode === 'continuous') {
+      await invoke('start_continuous');
+      continuous = true;
+      recording = true;
+      setStatus('Nasłuchuję', 'listening');
+      return;
+    }
     await invoke('start_recording');
     recording = true;
     elements.record.setAttribute('aria-label', 'Zatrzymaj nagrywanie');
@@ -127,7 +153,12 @@ async function beginRecording() {
 }
 
 async function finishRecording() {
-  if (!recording || processing) return;
+  if (!recording || (processing && !continuous)) return;
+  if (continuous) {
+    continuous = false;
+    await invoke('stop_continuous');
+    return;
+  }
   recording = false;
   processing = true;
   elements.record.setAttribute('aria-label', 'Rozpocznij nagrywanie');
@@ -143,8 +174,8 @@ async function finishRecording() {
   }
 }
 
-function showTranscript(text) {
-  transcript = text || '';
+function showTranscript(text, append = false) {
+  transcript = append && transcript ? `${transcript} ${text || ''}`.trim() : (text || '');
   elements.transcript.textContent = transcript;
   elements.result.hidden = !transcript;
 }
@@ -194,8 +225,11 @@ elements.preferences.addEventListener('submit', async (event) => {
         polish: elements.polish.checked,
         auto_paste: elements.autoPaste.checked,
         shortcut: elements.hotkey.value.trim(),
+        activation_mode: [...elements.activationModes].find(input => input.checked)?.value || 'hold',
       },
     });
+    activationMode = [...elements.activationModes].find(input => input.checked)?.value || 'hold';
+    renderShortcut(elements.hotkey.value.trim());
     settingsMessage('Ustawienia zapisane.');
   } catch (error) {
     settingsMessage(String(error), true);
@@ -206,19 +240,33 @@ listen('flow-state', ({ payload }) => {
   if (payload.phase === 'recording') {
     recording = true;
     setStatus(payload.message, 'recording');
+  } else if (payload.phase === 'listening') {
+    continuous = true;
+    recording = true;
+    processing = false;
+    setStatus(payload.message, 'listening');
   } else if (payload.phase === 'processing') {
-    recording = false;
+    recording = continuous;
     processing = true;
     setStatus(payload.message, 'processing');
+  } else if (payload.phase === 'phrase') {
+    recording = true;
+    processing = false;
+    showTranscript(payload.transcript, true);
+    setStatus('Nasłuchuję', 'listening');
   } else if (payload.phase === 'done') {
     recording = false;
     processing = false;
     showTranscript(payload.transcript);
     setStatus(payload.message);
   } else if (payload.phase === 'error') {
-    recording = false;
     processing = false;
     setStatus(payload.message, 'error');
+  } else if (payload.phase === 'idle') {
+    continuous = false;
+    recording = false;
+    processing = false;
+    setStatus(payload.message);
   }
 });
 

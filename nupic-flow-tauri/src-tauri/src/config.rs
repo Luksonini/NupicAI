@@ -15,6 +15,7 @@ pub struct AppSettings {
     pub polish: bool,
     pub auto_paste: bool,
     pub shortcut: String,
+    pub activation_mode: String,
 }
 
 impl Default for AppSettings {
@@ -27,6 +28,7 @@ impl Default for AppSettings {
             polish: false,
             auto_paste: true,
             shortcut: "Ctrl+Alt+Space".into(),
+            activation_mode: "hold".into(),
         }
     }
 }

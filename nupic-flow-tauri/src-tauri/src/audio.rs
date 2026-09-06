@@ -203,6 +203,31 @@ impl AudioRecorder {
     }
 
     pub fn stop_wav(&mut self) -> Result<Vec<u8>, String> {
+        self.stop_backend();
+        let input = self
+            .samples
+            .lock()
+            .map_err(|_| "Błąd bufora mikrofonu")?
+            .clone();
+        if input.len() < (self.sample_rate as usize / 4) {
+            return Err("Nagranie jest zbyt krótkie".into());
+        }
+        encode_wav(&resample_linear(&input, self.sample_rate, OUTPUT_RATE))
+    }
+
+    pub fn drain_samples(&mut self) -> Result<(Vec<f32>, u32), String> {
+        let mut samples = self.samples.lock().map_err(|_| "Błąd bufora audio")?;
+        Ok((std::mem::take(&mut *samples), self.sample_rate))
+    }
+
+    pub fn cancel(&mut self) {
+        self.stop_backend();
+        if let Ok(mut samples) = self.samples.lock() {
+            samples.clear();
+        }
+    }
+
+    fn stop_backend(&mut self) {
         if let Some(backend) = self.backend.take() {
             match backend {
                 CaptureBackend::Microphone(stream) => drop(stream),
@@ -216,33 +241,6 @@ impl AudioRecorder {
         }
         self.started_at = None;
         self.level_bits.store(0, Ordering::Relaxed);
-        let input = self
-            .samples
-            .lock()
-            .map_err(|_| "Błąd bufora mikrofonu")?
-            .clone();
-        if input.len() < (self.sample_rate as usize / 4) {
-            return Err("Nagranie jest zbyt krótkie".into());
-        }
-        let mono = resample_linear(&input, self.sample_rate, OUTPUT_RATE);
-        let mut cursor = Cursor::new(Vec::new());
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: OUTPUT_RATE,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        {
-            let mut writer =
-                hound::WavWriter::new(&mut cursor, spec).map_err(|error| error.to_string())?;
-            for sample in mono {
-                writer
-                    .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
-                    .map_err(|error| error.to_string())?;
-            }
-            writer.finalize().map_err(|error| error.to_string())?;
-        }
-        Ok(cursor.into_inner())
     }
 
     pub fn status(&self) -> RecordingStatus {
@@ -255,6 +253,27 @@ impl AudioRecorder {
                 .unwrap_or(0),
         }
     }
+}
+
+pub fn encode_wav(samples: &[f32]) -> Result<Vec<u8>, String> {
+    let mut cursor = Cursor::new(Vec::new());
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: OUTPUT_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    {
+        let mut writer =
+            hound::WavWriter::new(&mut cursor, spec).map_err(|error| error.to_string())?;
+        for sample in samples {
+            writer
+                .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .map_err(|error| error.to_string())?;
+        }
+        writer.finalize().map_err(|error| error.to_string())?;
+    }
+    Ok(cursor.into_inner())
 }
 
 fn select_device(host: &cpal::Host, preferred: &str) -> Result<Device, String> {
@@ -357,7 +376,7 @@ fn push_pcm16(
     level.store(peak.sqrt().clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
-fn resample_linear(input: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
+pub(crate) fn resample_linear(input: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
     if input_rate == output_rate {
         return input.to_vec();
     }

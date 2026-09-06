@@ -30,8 +30,8 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
-    "shortDescription": "Hold a shortcut, speak, and paste the transcript.",
-    "longDescription": "NupicAI Flow is a lightweight push-to-talk dictation client for NupicAI.",
+    "shortDescription": "Speak and paste transcripts into any application.",
+    "longDescription": "NupicAI Flow is a lightweight native dictation client with push-to-talk, toggle and automatic voice activity detection.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

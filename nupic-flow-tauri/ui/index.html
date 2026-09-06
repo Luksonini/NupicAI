@@ -74,6 +74,14 @@
             <select id="input-device"><option value="">Domyślny mikrofon</option></select>
           </label>
           <label>Skrót globalny<input id="hotkey" type="text" value="Ctrl+Alt+Space" spellcheck="false" /></label>
+          <fieldset class="source-fieldset">
+            <legend>Działanie skrótu</legend>
+            <div class="segmented-control activation-control">
+              <label><input type="radio" name="activation-mode" value="hold" checked /><span>Przytrzymaj</span></label>
+              <label><input type="radio" name="activation-mode" value="toggle" /><span>Przełącz</span></label>
+              <label><input type="radio" name="activation-mode" value="continuous" /><span>Auto VAD</span></label>
+            </div>
+          </fieldset>
           <label class="toggle-row"><span><strong>Automatyczne wklejanie</strong><small>Wstaw tekst do aktywnego pola</small></span><input id="auto-paste" type="checkbox" /></label>
           <label class="toggle-row"><span><strong>Korekta przez AI</strong><small>Dokładniej, ale trochę wolniej</small></span><input id="polish" type="checkbox" /></label>
           <button class="primary-button" type="submit">Zapisz ustawienia</button>

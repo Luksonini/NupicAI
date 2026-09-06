@@ -1,12 +1,14 @@
 # NupicAI Flow for desktop
 
-Native Tauri 2 push-to-talk client for the NupicAI server. It is intentionally isolated
+Native Tauri 2 dictation client for the NupicAI server. It is intentionally isolated
 from `nupic-flow-desktop`, which remains the Python reference implementation.
 
 ## Included in the first native build
 
 - compact NupicAI recording window with a live microphone meter,
 - global `Ctrl+Alt+Space` push-to-talk shortcut,
+- hold-to-talk, shortcut toggle and continuous Silero VAD activation modes,
+- local speech endpointing with pre-roll, silence skipping and phrase-by-phrase paste,
 - native microphone capture through CPAL,
 - system-audio capture through PipeWire/PulseAudio on Linux and WASAPI loopback on Windows,
 - selectable input device,
@@ -15,6 +17,14 @@ from `nupic-flow-desktop`, which remains the Python reference implementation.
 - optional `/dictation/polish` pass,
 - clipboard delivery and optional paste into the previously focused application,
 - system tray and single-instance behavior.
+
+## Activation modes
+
+- `Hold`: recording lasts while the global shortcut is held.
+- `Toggle`: one press starts recording and the next press transcribes it.
+- `Auto VAD`: one press starts continuous listening. A bundled Silero VAD keeps 320 ms of pre-roll, ignores silence, and submits each completed phrase after roughly 600 ms of silence. Press the shortcut again to stop.
+
+`Auto VAD` performs phrase-level near-real-time transcription. The current Parakeet TDT server model is full-context, so partial words are not emitted while a phrase is still being spoken.
 
 The account password is never saved. The session token is stored by Secret Service on
 Linux, Windows Credential Manager on Windows and Keychain on macOS.
