@@ -78,6 +78,11 @@ body.recording .record-halo { animation: halo 1.25s ease-out infinite; }
 .settings label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 10px; }
 .settings label.disabled { opacity: .42; }
 .settings input:not([type="checkbox"]), .settings select { width: 100%; min-height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface); outline: none; }
+.hotkey-row { display: grid; grid-template-columns: 1fr 40px; gap: 7px; }
+.hotkey-row input { cursor: pointer; }
+.capture-hotkey { width: 40px; min-height: 40px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface); }
+.capture-hotkey:hover, .capture-hotkey.active { color: var(--accent-strong); border-color: var(--accent); background: var(--surface-raised); }
+.capture-hotkey svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .settings input:focus, .settings select:focus { border-color: var(--accent); background: var(--surface-raised); }
 .primary-button, .secondary-button { min-height: 40px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 6px; color: #0a0806; background: var(--accent); font-size: 11px; font-weight: 700; }
 .secondary-button { min-height: 34px; margin-left: auto; color: var(--accent-strong); border-color: var(--line-strong); background: transparent; }

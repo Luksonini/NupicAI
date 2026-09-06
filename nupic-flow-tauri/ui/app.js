@@ -25,6 +25,7 @@ const elements = {
   activationModes: document.querySelectorAll('input[name="activation-mode"]'),
   microphoneDeviceRow: document.querySelector('#microphone-device-row'),
   hotkey: document.querySelector('#hotkey'),
+  hotkeyCapture: document.querySelector('#hotkey-capture'),
   autoPaste: document.querySelector('#auto-paste'),
   polish: document.querySelector('#polish'),
   settingsMessage: document.querySelector('#settings-message'),
@@ -36,6 +37,8 @@ let authenticated = false;
 let transcript = '';
 let continuous = false;
 let activationMode = 'hold';
+let capturingHotkey = false;
+let previousHotkey = 'Ctrl+Alt+Space';
 
 function setStatus(message, phase = 'idle') {
   elements.status.textContent = message;
@@ -55,6 +58,43 @@ function renderShortcut(shortcut) {
     key.textContent = part;
     elements.shortcut.append(key);
   });
+}
+
+function beginHotkeyCapture() {
+  if (capturingHotkey) return;
+  capturingHotkey = true;
+  previousHotkey = elements.hotkey.value;
+  elements.hotkey.value = 'Naciśnij kombinację…';
+  elements.hotkeyCapture.classList.add('active');
+  elements.hotkeyCapture.setAttribute('aria-label', 'Oczekiwanie na skrót');
+}
+
+function finishHotkeyCapture(value = previousHotkey) {
+  capturingHotkey = false;
+  elements.hotkey.value = value;
+  elements.hotkeyCapture.classList.remove('active');
+  elements.hotkeyCapture.setAttribute('aria-label', 'Ustaw skrót');
+}
+
+function shortcutFromEvent(event) {
+  const keyNames = {
+    ' ': 'Space',
+    ArrowUp: 'ArrowUp',
+    ArrowDown: 'ArrowDown',
+    ArrowLeft: 'ArrowLeft',
+    ArrowRight: 'ArrowRight',
+    Escape: 'Escape',
+  };
+  const modifiers = [];
+  if (event.ctrlKey) modifiers.push('Ctrl');
+  if (event.altKey) modifiers.push('Alt');
+  if (event.shiftKey) modifiers.push('Shift');
+  if (event.metaKey) modifiers.push('Super');
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null;
+  let key = keyNames[event.key] || event.key;
+  if (/^[a-z]$/i.test(key)) key = key.toUpperCase();
+  if (!/^(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Space|Enter|Tab|Backspace|Delete|Insert|Home|End|PageUp|PageDown|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Escape)$/.test(key)) return null;
+  return [...modifiers, key].join('+');
 }
 
 function setAuthenticated(user) {
@@ -181,6 +221,19 @@ function showTranscript(text, append = false) {
 }
 
 elements.record.addEventListener('click', () => recording ? finishRecording() : beginRecording());
+elements.hotkey.addEventListener('click', beginHotkeyCapture);
+elements.hotkeyCapture.addEventListener('click', beginHotkeyCapture);
+window.addEventListener('keydown', event => {
+  if (!capturingHotkey) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === 'Escape') {
+    finishHotkeyCapture();
+    return;
+  }
+  const shortcut = shortcutFromEvent(event);
+  if (shortcut) finishHotkeyCapture(shortcut);
+}, true);
 elements.settingsOpen.addEventListener('click', openSettings);
 elements.settingsClose.addEventListener('click', closeSettings);
 elements.scrim.addEventListener('click', closeSettings);

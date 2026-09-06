@@ -11,15 +11,12 @@ NupicAI jest marka aplikacji. Nazwa Wegorz pozostaje nazwa lokalnego silnika TTS
 
 ## NupicAI Flow na pulpit
 
-Lekki klient push-to-talk w Tauri 2 i Rust znajduje sie w
+Lekki klient dyktowania w Tauri 2 i Rust znajduje sie w
 [`nupic-flow-tauri/`](nupic-flow-tauri/). Ma jedno glowne sterowanie nagrywaniem,
-globalny skrot, ikone w zasobniku, ustawienia pod zebatka oraz tryby mikrofonu i
-dzwieku systemowego. Nie wymaga Pythona ani modeli na komputerze uzytkownika;
+przechwytywany globalny skrot, tryby hold/toggle/Auto VAD, ikone w zasobniku,
+ustawienia pod zebatka oraz tryby mikrofonu i dzwieku systemowego. Nie wymaga Pythona ani modeli na komputerze uzytkownika;
 wysyla 16 kHz WAV do tego backendu i korzysta z konta NupicAI. Token sesji trafia
 do systemowego magazynu poswiadczen, a haslo nie jest zapisywane.
-
-Starszy [`nupic-flow-desktop/`](nupic-flow-desktop/) pozostaje implementacja
-referencyjna w Pythonie. Nowe wydania desktopowe nalezy rozwijac w wersji Tauri.
 
 ## Logo i identyfikacja
 

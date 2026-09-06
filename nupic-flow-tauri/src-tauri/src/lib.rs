@@ -131,7 +131,13 @@ fn save_settings(
     ) {
         return Err("Nieprawidłowy tryb aktywacji".into());
     }
-    register_shortcut(&app, &settings.shortcut)?;
+    let previous_shortcut = state
+        .settings
+        .lock()
+        .map_err(|_| state_error())?
+        .shortcut
+        .clone();
+    replace_shortcut(&app, &settings.shortcut, &previous_shortcut)?;
     config::save(&settings)?;
     *state.settings.lock().map_err(|_| state_error())? = settings;
     Ok(())
@@ -409,6 +415,17 @@ fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
     app.global_shortcut()
         .register(shortcut)
         .map_err(|error| format!("Nieprawidłowy skrót: {error}"))
+}
+
+fn replace_shortcut(app: &AppHandle, shortcut: &str, previous: &str) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = app.global_shortcut().register(shortcut) {
+        let _ = app.global_shortcut().register(previous);
+        return Err(format!("Nieprawidłowy skrót: {error}"));
+    }
+    Ok(())
 }
 
 fn show_window(app: &AppHandle) {

@@ -1,7 +1,6 @@
 # NupicAI Flow for desktop
 
-Native Tauri 2 dictation client for the NupicAI server. It is intentionally isolated
-from `nupic-flow-desktop`, which remains the Python reference implementation.
+Native Tauri 2 dictation client for the NupicAI server.
 
 ## Included in the first native build
 
@@ -46,6 +45,12 @@ Run the development build:
 ```bash
 cd nupic-flow-tauri
 cargo run -p nupic-flow
+```
+
+On an already configured development machine, the shortest command is:
+
+```bash
+./run.sh
 ```
 
 Build a release binary:

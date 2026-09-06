@@ -73,7 +73,14 @@
           <label id="microphone-device-row">Mikrofon
             <select id="input-device"><option value="">Domyślny mikrofon</option></select>
           </label>
-          <label>Skrót globalny<input id="hotkey" type="text" value="Ctrl+Alt+Space" spellcheck="false" /></label>
+          <label>Skrót globalny
+            <span class="hotkey-row">
+              <input id="hotkey" type="text" value="Ctrl+Alt+Space" readonly spellcheck="false" />
+              <button id="hotkey-capture" class="capture-hotkey" type="button" title="Ustaw skrót" aria-label="Ustaw skrót">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/></svg>
+              </button>
+            </span>
+          </label>
           <fieldset class="source-fieldset">
             <legend>Działanie skrótu</legend>
             <div class="segmented-control activation-control">
