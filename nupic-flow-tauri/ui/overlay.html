@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>NupicAI Flow</title>
+    <link rel="stylesheet" href="overlay.css" />
+  </head>
+  <body>
+    <button id="quit" class="quit" type="button" title="Zakończ NupicAI Flow" aria-label="Zakończ NupicAI Flow">
+      <svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+    </button>
+    <button id="dictate" type="button" title="Rozpocznij dyktowanie" aria-label="Rozpocznij dyktowanie">
+      <span class="pulse" aria-hidden="true"></span>
+      <img src="assets/mark.png" alt="" />
+      <svg class="capture-icon source-mic" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8"/></svg>
+      <svg class="capture-icon source-system" aria-hidden="true" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>
+      <span class="source-badge" aria-hidden="true">
+        <svg class="source-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M18 11v1a6 6 0 0 1-12 0v-1"/></svg>
+        <svg class="source-system" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg>
+      </span>
+      <span class="progress" aria-hidden="true"></span>
+    </button>
+    <script src="overlay.js"></script>
+  </body>
+</html>

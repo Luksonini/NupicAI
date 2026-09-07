@@ -11,9 +11,19 @@
     <main class="shell">
       <header class="topbar">
         <img class="brand" src="assets/logo.png" alt="NupicAI" />
-        <button id="settings-open" class="icon-button" type="button" title="Ustawienia" aria-label="Ustawienia">
-          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
-        </button>
+        <div class="top-actions">
+          <button id="quick-source" class="source-button" type="button" title="Zmień źródło" aria-label="Zmień źródło">
+            <svg class="source-mic" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8"/></svg>
+            <svg class="source-system" aria-hidden="true" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12"/></svg>
+            <span id="quick-source-label">Mikrofon</span>
+          </button>
+          <button id="live-vad" class="icon-button live-button" type="button" title="Transkrypcja na żywo" aria-label="Transkrypcja na żywo">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12h2M8 8v8M12 4v16M16 7v10M20 10v4"/></svg>
+          </button>
+          <button id="settings-open" class="icon-button" type="button" title="Ustawienia" aria-label="Ustawienia">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
       </header>
 
       <section class="capture" aria-live="polite">
@@ -40,7 +50,7 @@
     <aside id="settings" class="settings" aria-hidden="true">
       <header>
         <div>
-          <span>Ustawienia</span>
+          <span data-i18n="settings">Ustawienia</span>
           <strong>NupicAI Flow</strong>
         </div>
         <button id="settings-close" class="icon-button" type="button" title="Zamknij" aria-label="Zamknij ustawienia">
@@ -50,48 +60,71 @@
 
       <div class="settings-scroll">
         <section id="account-authenticated" class="account-state" hidden>
-          <span>Konto</span>
+          <span data-i18n="account">Konto</span>
           <strong id="account-name"></strong>
-          <button id="logout" class="secondary-button" type="button">Wyloguj</button>
+          <button id="logout" class="secondary-button" type="button" data-i18n="logout">Wyloguj</button>
         </section>
 
         <form id="login-form">
-          <label>Serwer<input id="server-url" type="url" required spellcheck="false" /></label>
-          <label>E-mail<input id="email" type="email" required autocomplete="username" /></label>
-          <label>Hasło<input id="password" type="password" required autocomplete="current-password" /></label>
-          <button class="primary-button" type="submit">Zaloguj</button>
+          <label><span data-i18n="server">Serwer</span><input id="server-url" type="url" required spellcheck="false" /></label>
+          <label><span>E-mail</span><input id="email" type="email" required autocomplete="username" /></label>
+          <label><span data-i18n="password">Hasło</span><input id="password" type="password" required autocomplete="current-password" /></label>
+          <button class="primary-button" type="submit" data-i18n="login">Zaloguj</button>
         </form>
 
         <form id="preferences-form">
           <fieldset class="source-fieldset">
-            <legend>Źródło nagrania</legend>
+            <legend data-i18n="audioSource">Źródło nagrania</legend>
             <div class="segmented-control">
-              <label><input type="radio" name="input-source" value="microphone" checked /><span>Mikrofon</span></label>
-              <label><input type="radio" name="input-source" value="system" /><span>Dźwięk systemu</span></label>
+              <label><input type="radio" name="input-source" value="microphone" checked /><span data-i18n="microphone">Mikrofon</span></label>
+              <label><input type="radio" name="input-source" value="system" /><span data-i18n="systemAudio">Dźwięk systemu</span></label>
             </div>
           </fieldset>
-          <label id="microphone-device-row">Mikrofon
+          <label id="microphone-device-row"><span data-i18n="microphone">Mikrofon</span>
             <select id="input-device"><option value="">Domyślny mikrofon</option></select>
           </label>
-          <label>Skrót globalny
-            <span class="hotkey-row">
-              <input id="hotkey" type="text" value="Ctrl+Alt+Space" readonly spellcheck="false" />
-              <button id="hotkey-capture" class="capture-hotkey" type="button" title="Ustaw skrót" aria-label="Ustaw skrót">
+          <button id="test-microphone" class="utility-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8"/></svg>
+            <span data-i18n="testMicrophone">Testuj mikrofon</span>
+          </button>
+          <div id="audio-diagnostic" class="audio-diagnostic"><span></span><strong></strong></div>
+          <fieldset class="source-fieldset hotkey-fieldset">
+            <legend data-i18n="shortcuts">Skróty globalne</legend>
+            <label><span data-i18n="hold">Przytrzymaj</span>
+              <span class="hotkey-row">
+                <input id="hotkey-hold" data-hotkey="hold" type="text" value="Ctrl+Alt+Space" readonly spellcheck="false" />
+                <button class="capture-hotkey" data-hotkey-capture="hold" type="button" title="Ustaw skrót" aria-label="Ustaw skrót">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/></svg>
+                </button>
+              </span>
+            </label>
+            <label><span data-i18n="toggle">Przełącz</span>
+              <span class="hotkey-row">
+                <input id="hotkey-toggle" data-hotkey="toggle" type="text" value="Ctrl+Alt+D" readonly spellcheck="false" />
+                <button class="capture-hotkey" data-hotkey-capture="toggle" type="button" title="Ustaw skrót" aria-label="Ustaw skrót">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/></svg>
+                </button>
+              </span>
+            </label>
+            <label><span data-i18n="autoVad">Auto VAD</span>
+              <span class="hotkey-row">
+                <input id="hotkey-continuous" data-hotkey="continuous" type="text" value="Ctrl+Alt+V" readonly spellcheck="false" />
+                <button class="capture-hotkey" data-hotkey-capture="continuous" type="button" title="Ustaw skrót" aria-label="Ustaw skrót">
                 <svg aria-hidden="true" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/></svg>
-              </button>
-            </span>
-          </label>
-          <fieldset class="source-fieldset">
-            <legend>Działanie skrótu</legend>
-            <div class="segmented-control activation-control">
-              <label><input type="radio" name="activation-mode" value="hold" checked /><span>Przytrzymaj</span></label>
-              <label><input type="radio" name="activation-mode" value="toggle" /><span>Przełącz</span></label>
-              <label><input type="radio" name="activation-mode" value="continuous" /><span>Auto VAD</span></label>
-            </div>
+                </button>
+              </span>
+            </label>
           </fieldset>
-          <label class="toggle-row"><span><strong>Automatyczne wklejanie</strong><small>Wstaw tekst do aktywnego pola</small></span><input id="auto-paste" type="checkbox" /></label>
-          <label class="toggle-row"><span><strong>Korekta przez AI</strong><small>Dokładniej, ale trochę wolniej</small></span><input id="polish" type="checkbox" /></label>
-          <button class="primary-button" type="submit">Zapisz ustawienia</button>
+          <label class="toggle-row"><span><strong data-i18n="autoPaste">Automatyczne wklejanie</strong><small data-i18n="autoPasteHelp">Wstaw tekst do aktywnego pola</small></span><input id="auto-paste" type="checkbox" /></label>
+          <label class="toggle-row"><span><strong data-i18n="aiCorrection">Korekta przez AI</strong><small data-i18n="aiCorrectionHelp">Dokładniej, ale trochę wolniej</small></span><input id="polish" type="checkbox" /></label>
+          <label><span data-i18n="language">Język aplikacji</span>
+            <select id="language">
+              <option value="auto" data-i18n="languageAuto">Automatyczny</option>
+              <option value="pl">Polski</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <button id="save-settings" class="primary-button" type="submit" data-i18n="saveSettings">Zapisz ustawienia</button>
         </form>
         <p id="settings-message" class="settings-message"></p>
       </div>

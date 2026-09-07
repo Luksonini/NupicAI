@@ -1,0 +1,33 @@
+:root { color-scheme: dark; --bg: #0d0a07; --line: #6f512d; --accent: #e6b666; --success: #4fc792; }
+* { box-sizing: border-box; }
+html, body { width: 62px; height: 62px; margin: 0; overflow: hidden; background: transparent; }
+body { display: grid; place-items: center; }
+#dictate { position: relative; width: 54px; height: 54px; display: grid; place-items: center; padding: 0; overflow: visible; border: 1px solid var(--line); border-radius: 50%; color: #fff8ed; background: rgba(13, 10, 7, .96); box-shadow: 0 10px 28px rgba(0, 0, 0, .46), inset 0 0 0 4px rgba(230, 182, 102, .035); cursor: pointer; transition: border-color 140ms ease, transform 140ms ease, background 140ms ease; }
+#dictate:hover { border-color: var(--accent); background: #171008; transform: scale(1.035); }
+#dictate:active { transform: scale(.96); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.quit { position: absolute; z-index: 3; top: 3px; right: 3px; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 1px solid #5a422c; border-radius: 50%; color: #c8b69d; background: #17110c; box-shadow: 0 3px 10px rgba(0, 0, 0, .4); cursor: pointer; opacity: .72; transform: scale(.9); transition: color 120ms ease, border-color 120ms ease, background 120ms ease, opacity 120ms ease, transform 120ms ease; }
+body:hover .quit, .quit:focus-visible { opacity: 1; transform: scale(1); }
+.quit:hover { color: #fff5e8; border-color: #a5584f; background: #6f302b; }
+.quit svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+img { width: 40px; height: 40px; object-fit: contain; opacity: .96; transition: opacity 140ms ease, transform 140ms ease; }
+.capture-icon { position: absolute; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transform: scale(.75); transition: opacity 140ms ease, transform 140ms ease; }
+.source-system { display: none; }
+body.system .source-mic { display: none; }
+body.system .source-system { display: block; }
+.source-badge { position: absolute; left: 2px; bottom: 4px; width: 15px; height: 15px; display: grid; place-items: center; border: 1px solid #49351f; border-radius: 50%; color: var(--accent); background: var(--bg); }
+.source-badge svg { width: 9px; height: 9px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pulse { position: absolute; inset: -1px; border: 1px solid transparent; border-radius: 50%; pointer-events: none; }
+.progress { position: absolute; width: 6px; height: 6px; right: 2px; bottom: 5px; border: 1px solid #0d0a07; border-radius: 50%; background: var(--success); }
+body.recording #dictate { border-color: var(--accent); background: #1a1108; }
+body.recording img { opacity: .18; transform: scale(.88); }
+body.recording .capture-icon { opacity: 1; transform: scale(1); }
+body.recording .pulse { animation: pulse 1.25s ease-out infinite; }
+body.processing #dictate { cursor: wait; }
+body.processing img { animation: breathe 800ms ease-in-out infinite alternate; opacity: .72; }
+body.processing .progress { background: var(--accent); animation: blink 700ms ease-in-out infinite alternate; }
+body.error .progress { background: #ef7c75; }
+@keyframes pulse { from { border-color: rgba(230, 182, 102, .8); transform: scale(1); opacity: 1; } to { border-color: rgba(230, 182, 102, 0); transform: scale(1.16); opacity: 0; } }
+@keyframes breathe { from { transform: scale(.88); opacity: .42; } to { transform: scale(1); opacity: .9; } }
+@keyframes blink { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; } }

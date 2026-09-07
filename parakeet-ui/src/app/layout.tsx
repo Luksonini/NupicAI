@@ -6,7 +6,7 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:8765';
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: 'NupicAI - transkrypcja, tłumaczenie i dubbing AI',
-  description: 'Transkrybuj audio i wideo w 25 językach, tłumacz i twórz naturalny dubbing po polsku lub angielsku.',
+  description: 'Transkrybuj audio i wideo w 25 językach, dyktuj do dowolnej aplikacji, tłumacz i twórz naturalny dubbing po polsku lub angielsku.',
   icons: { icon: '/brand/mark.png', apple: '/brand/mark.png' },
   manifest: '/manifest.webmanifest',
   alternates: { canonical: '/', languages: { pl: '/', en: '/en' } },
@@ -31,7 +31,7 @@ const structuredData = {
   name: 'NupicAI',
   alternateName: 'Neural Unified Platform for Intelligent Communication',
   applicationCategory: 'MultimediaApplication',
-  operatingSystem: 'Web',
+  operatingSystem: 'Web, Linux',
   inLanguage: ['pl', 'en'],
   description: 'Studio AI do transkrypcji, tłumaczenia i dubbingu audio oraz wideo.',
   creator: {
@@ -52,6 +52,8 @@ const structuredData = {
     'Translation from supported languages into Polish or English',
     'Natural Polish and English AI dubbing',
     'Subtitle, WAV and MP4 export',
+    'Desktop dictation into any active text field',
+    'On-device voice activity detection',
   ],
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'PLN', description: 'Bezpłatny dostęp w okresie pilotażowym' },
 };

@@ -3,19 +3,23 @@ mod audio;
 mod config;
 mod vad;
 
-use audio::{encode_wav, AudioRecorder, RecordingStatus};
+use audio::{encode_wav_with_edge_silence, AudioRecorder, AudioTestResult, RecordingStatus};
 use config::AppSettings;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, Position, State, WebviewUrl,
+    WebviewWindowBuilder,
+};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 struct AppState {
     settings: Mutex<AppSettings>,
@@ -23,6 +27,7 @@ struct AppState {
     processing: AtomicBool,
     continuous: AtomicBool,
     shortcut_down: AtomicBool,
+    active_shortcut: AtomicU32,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,22 +130,42 @@ fn save_settings(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<(), String> {
-    if !matches!(
-        settings.activation_mode.as_str(),
-        "hold" | "toggle" | "continuous"
-    ) {
-        return Err("Nieprawidłowy tryb aktywacji".into());
+    if !matches!(settings.language.as_str(), "auto" | "pl" | "en") {
+        return Err("Nieprawidłowy język interfejsu".into());
     }
-    let previous_shortcut = state
+    let previous = state.settings.lock().map_err(|_| state_error())?.clone();
+    let input_source = settings.input_source.clone();
+    replace_shortcuts(&app, &settings, &previous)?;
+    config::save(&settings)?;
+    *state.settings.lock().map_err(|_| state_error())? = settings;
+    let _ = app.emit("input-source-changed", input_source);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_input_source(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input_source: String,
+) -> Result<(), String> {
+    if !matches!(input_source.as_str(), "microphone" | "system") {
+        return Err("Nieprawidłowe źródło dźwięku".into());
+    }
+    let mut settings = state.settings.lock().map_err(|_| state_error())?;
+    settings.input_source = input_source.clone();
+    config::save(&settings)?;
+    let _ = app.emit("input-source-changed", input_source);
+    Ok(())
+}
+
+#[tauri::command]
+fn current_input_source(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state
         .settings
         .lock()
         .map_err(|_| state_error())?
-        .shortcut
-        .clone();
-    replace_shortcut(&app, &settings.shortcut, &previous_shortcut)?;
-    config::save(&settings)?;
-    *state.settings.lock().map_err(|_| state_error())? = settings;
-    Ok(())
+        .input_source
+        .clone())
 }
 
 #[tauri::command]
@@ -175,6 +200,27 @@ fn start_recording(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn recording_status(state: State<'_, AppState>) -> Result<RecordingStatus, String> {
     Ok(state.recorder.lock().map_err(|_| state_error())?.status())
+}
+
+#[tauri::command]
+fn start_microphone_test(state: State<'_, AppState>, input_device: String) -> Result<(), String> {
+    if state.processing.load(Ordering::Relaxed) || state.continuous.load(Ordering::Relaxed) {
+        return Err("Zakończ bieżące nagrywanie przed testem mikrofonu".into());
+    }
+    state
+        .recorder
+        .lock()
+        .map_err(|_| state_error())?
+        .start("microphone", &input_device)
+}
+
+#[tauri::command]
+fn stop_microphone_test(state: State<'_, AppState>) -> Result<AudioTestResult, String> {
+    state
+        .recorder
+        .lock()
+        .map_err(|_| state_error())?
+        .stop_test()
 }
 
 async fn stop_and_transcribe_inner(app: AppHandle) -> Result<api::TranscriptResult, String> {
@@ -216,6 +262,41 @@ fn cancel_recording(state: State<'_, AppState>) -> Result<(), String> {
     let mut recorder = state.recorder.lock().map_err(|_| state_error())?;
     recorder.cancel();
     Ok(())
+}
+
+#[tauri::command]
+fn toggle_floating_recording(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.processing.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if state.continuous.load(Ordering::SeqCst) {
+        stop_continuous(app);
+        return Ok(());
+    }
+    let is_recording = state
+        .recorder
+        .lock()
+        .map_err(|_| state_error())?
+        .status()
+        .recording;
+    if is_recording {
+        spawn_stop_and_transcribe(app);
+    } else {
+        start_recording_inner(&state)?;
+        emit_phase(&app, "recording", "Mów teraz", None);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn show_main_window(app: AppHandle) {
+    show_window(&app);
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 fn emit_phase(app: &AppHandle, phase: &str, message: &str, transcript: Option<String>) {
@@ -374,7 +455,7 @@ async fn continuous_loop(app: AppHandle) {
 async fn process_continuous_utterance(app: &AppHandle, utterance: Vec<f32>) {
     let state = app.state::<AppState>();
     state.processing.store(true, Ordering::SeqCst);
-    let result = match encode_wav(&utterance) {
+    let result = match encode_wav_with_edge_silence(&utterance) {
         Ok(wav) => transcribe_wav(app, wav, true).await,
         Err(error) => Err(error),
     };
@@ -408,22 +489,53 @@ fn paste_clipboard() -> Result<(), String> {
     paste_result
 }
 
-fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
-    app.global_shortcut()
-        .unregister_all()
-        .map_err(|error| error.to_string())?;
-    app.global_shortcut()
-        .register(shortcut)
-        .map_err(|error| format!("Nieprawidłowy skrót: {error}"))
+fn shortcut_values(settings: &AppSettings) -> [&str; 3] {
+    [
+        settings.shortcut_hold.as_str(),
+        settings.shortcut_toggle.as_str(),
+        settings.shortcut_continuous.as_str(),
+    ]
 }
 
-fn replace_shortcut(app: &AppHandle, shortcut: &str, previous: &str) -> Result<(), String> {
+fn register_shortcuts(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
+    let values = shortcut_values(settings);
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return Err("Każdy tryb musi mieć przypisany skrót".into());
+    }
+    let parsed = values
+        .iter()
+        .map(|value| {
+            value
+                .parse::<Shortcut>()
+                .map_err(|error| format!("Nieprawidłowy skrót {value}: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if parsed[0].id() == parsed[1].id()
+        || parsed[0].id() == parsed[2].id()
+        || parsed[1].id() == parsed[2].id()
+    {
+        return Err("Każdy tryb musi mieć inny skrót".into());
+    }
     app.global_shortcut()
         .unregister_all()
         .map_err(|error| error.to_string())?;
-    if let Err(error) = app.global_shortcut().register(shortcut) {
-        let _ = app.global_shortcut().register(previous);
-        return Err(format!("Nieprawidłowy skrót: {error}"));
+    for shortcut in parsed {
+        if let Err(error) = app.global_shortcut().register(shortcut) {
+            let _ = app.global_shortcut().unregister_all();
+            return Err(format!("Nie można zarejestrować skrótu: {error}"));
+        }
+    }
+    Ok(())
+}
+
+fn replace_shortcuts(
+    app: &AppHandle,
+    settings: &AppSettings,
+    previous: &AppSettings,
+) -> Result<(), String> {
+    if let Err(error) = register_shortcuts(app, settings) {
+        let _ = register_shortcuts(app, previous);
+        return Err(error);
     }
     Ok(())
 }
@@ -434,6 +546,32 @@ fn show_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+fn install_dictation_window(app: &tauri::App) -> tauri::Result<()> {
+    let window =
+        WebviewWindowBuilder::new(app, "dictation", WebviewUrl::App("overlay.html".into()))
+            .title("NupicAI Flow")
+            .inner_size(62.0, 62.0)
+            .min_inner_size(62.0, 62.0)
+            .max_inner_size(62.0, 62.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focusable(false)
+            .visible(true)
+            .build()?;
+
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let area = monitor.work_area();
+        let x = area.position.x + area.size.width as i32 - 82;
+        let y = area.position.y + area.size.height as i32 - 102;
+        let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+    }
+    Ok(())
 }
 
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -483,17 +621,18 @@ pub fn run() {
             processing: AtomicBool::new(false),
             continuous: AtomicBool::new(false),
             shortcut_down: AtomicBool::new(false),
+            active_shortcut: AtomicU32::new(0),
         })
         .setup(|app| {
             install_tray(app)?;
-            let shortcut = app
+            install_dictation_window(app)?;
+            let settings = app
                 .state::<AppState>()
                 .settings
                 .lock()
                 .map_err(|_| std::io::Error::other(state_error()))?
-                .shortcut
                 .clone();
-            register_shortcut(app.handle(), &shortcut).map_err(std::io::Error::other)?;
+            register_shortcuts(app.handle(), &settings).map_err(std::io::Error::other)?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -507,14 +646,21 @@ pub fn run() {
             login,
             logout,
             save_settings,
+            set_input_source,
+            current_input_source,
             list_input_devices,
             copy_text,
             start_recording,
             recording_status,
+            start_microphone_test,
+            stop_microphone_test,
             stop_and_transcribe,
             start_continuous,
             stop_continuous,
             cancel_recording,
+            toggle_floating_recording,
+            show_main_window,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("NupicAI Flow failed to start");
@@ -522,7 +668,7 @@ pub fn run() {
 
 fn handle_shortcut(
     app: &AppHandle,
-    _: &tauri_plugin_global_shortcut::Shortcut,
+    shortcut: &Shortcut,
     event: tauri_plugin_global_shortcut::ShortcutEvent,
 ) {
     let state = app.state::<AppState>();
@@ -531,11 +677,13 @@ fn handle_shortcut(
             if state.shortcut_down.swap(true, Ordering::SeqCst) {
                 return;
             }
-            let mode = state
+            state.active_shortcut.store(shortcut.id(), Ordering::SeqCst);
+            let settings = state
                 .settings
                 .lock()
-                .map(|settings| settings.activation_mode.clone())
-                .unwrap_or_else(|_| "hold".into());
+                .map(|settings| settings.clone())
+                .unwrap_or_default();
+            let mode = shortcut_mode(&settings, shortcut.id());
             if mode == "continuous" {
                 if state.continuous.load(Ordering::SeqCst) {
                     stop_continuous(app.clone());
@@ -560,20 +708,43 @@ fn handle_shortcut(
         }
         ShortcutState::Released => {
             state.shortcut_down.store(false, Ordering::SeqCst);
-            let hold = state
+            let active = state.active_shortcut.swap(0, Ordering::SeqCst);
+            let hold_id = state
                 .settings
                 .lock()
-                .map(|settings| settings.activation_mode == "hold")
-                .unwrap_or(true);
+                .ok()
+                .and_then(|settings| settings.shortcut_hold.parse::<Shortcut>().ok())
+                .map(|shortcut| shortcut.id())
+                .unwrap_or(0);
             let is_recording = state
                 .recorder
                 .lock()
                 .map(|recorder| recorder.status().recording)
                 .unwrap_or(false);
-            if hold && is_recording {
+            if active == shortcut.id() && shortcut.id() == hold_id && is_recording {
                 spawn_stop_and_transcribe(app.clone());
             }
         }
+    }
+}
+
+fn shortcut_mode(settings: &AppSettings, id: u32) -> &'static str {
+    if settings
+        .shortcut_continuous
+        .parse::<Shortcut>()
+        .map(|shortcut| shortcut.id() == id)
+        .unwrap_or(false)
+    {
+        "continuous"
+    } else if settings
+        .shortcut_toggle
+        .parse::<Shortcut>()
+        .map(|shortcut| shortcut.id() == id)
+        .unwrap_or(false)
+    {
+        "toggle"
+    } else {
+        "hold"
     }
 }
 

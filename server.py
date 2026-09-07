@@ -966,6 +966,11 @@ from pydantic import BaseModel  # noqa: E402
 import uvicorn  # noqa: E402
 
 UI_OUT = HERE / "parakeet-ui" / "out"
+DESKTOP_DOWNLOADS_DIR = HERE / "runtime" / "downloads"
+DESKTOP_DOWNLOAD_FILES = {
+    "linux": ("nupicai-flow-linux-x86_64.AppImage", "nupicai-flow-linux-x86_64.tar.gz"),
+    "windows": ("nupicai-flow-windows-x86_64.exe", "nupicai-flow-windows-x86_64.msi"),
+}
 
 # ── Job system ─────────────────────────────────────────────────────────────
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -3072,6 +3077,37 @@ async def stream_job(job_id: str, user: User = Depends(_current_user)) -> Stream
 
 
 # ── Static UI ────────────────────────────────────────────────────────────────
+def _desktop_download(platform: str) -> Path | None:
+    for filename in DESKTOP_DOWNLOAD_FILES.get(platform, ()):
+        candidate = DESKTOP_DOWNLOADS_DIR / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@app.get("/api/desktop-downloads", include_in_schema=False)
+async def desktop_downloads() -> dict[str, Any]:
+    downloads = []
+    for platform in DESKTOP_DOWNLOAD_FILES:
+        artifact = _desktop_download(platform)
+        downloads.append({
+            "platform": platform,
+            "available": artifact is not None,
+            "url": f"/downloads/{platform}" if artifact else None,
+            "filename": artifact.name if artifact else None,
+            "size_bytes": artifact.stat().st_size if artifact else None,
+        })
+    return {"downloads": downloads}
+
+
+@app.get("/downloads/{platform}", include_in_schema=False)
+async def download_desktop_app(platform: str) -> FileResponse:
+    artifact = _desktop_download(platform.lower())
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Desktop build is not available yet")
+    return FileResponse(artifact, filename=artifact.name, media_type="application/octet-stream")
+
+
 if UI_OUT.exists():
     app.mount("/_next", StaticFiles(directory=UI_OUT / "_next"), name="nextjs-chunks")
 

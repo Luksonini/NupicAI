@@ -1,0 +1,107 @@
+name: Desktop installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: Production or test NupicAI server URL (HTTPS)
+        required: true
+        type: string
+  push:
+    tags:
+      - 'flow-v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  NUPICAI_SERVER_URL: ${{ inputs.server_url || vars.NUPICAI_SERVER_URL }}
+
+jobs:
+  linux:
+    name: Linux AppImage and DEB
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: nupic-flow-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate server URL
+        shell: bash
+        run: |
+          [[ "$NUPICAI_SERVER_URL" == https://* ]] || {
+            echo "Set an HTTPS server_url input or repository variable NUPICAI_SERVER_URL."
+            exit 2
+          }
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config libglib2.0-dev libgtk-3-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libasound2-dev libxdo-dev libdbus-1-dev pulseaudio-utils
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nupic-flow-tauri
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Build Linux packages
+        run: cargo tauri build --bundles appimage,deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupicai-flow-linux
+          if-no-files-found: error
+          path: |
+            nupic-flow-tauri/target/release/bundle/appimage/*.AppImage
+            nupic-flow-tauri/target/release/bundle/deb/*.deb
+
+  windows:
+    name: Windows NSIS installer
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: nupic-flow-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate server URL
+        shell: bash
+        run: |
+          [[ "$NUPICAI_SERVER_URL" == https://* ]] || {
+            echo "Set an HTTPS server_url input or repository variable NUPICAI_SERVER_URL."
+            exit 2
+          }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nupic-flow-tauri
+      - name: Install Tauri CLI
+        shell: bash
+        run: cargo install tauri-cli --version '^2' --locked
+      - name: Build Windows installer
+        shell: bash
+        run: cargo tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupicai-flow-windows
+          if-no-files-found: error
+          path: nupic-flow-tauri/target/release/bundle/nsis/*.exe
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/flow-v')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: release-assets
+        run: find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/**/*

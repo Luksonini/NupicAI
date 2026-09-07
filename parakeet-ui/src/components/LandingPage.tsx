@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import {
   ArrowRight, AudioLines, Check, ChevronDown, FileText, Languages,
-  Cpu, ExternalLink, Gauge, HeartHandshake, LockKeyhole, Mail, Mic2, Play,
-  ShieldCheck, Sparkles, Users, Video, X, Zap,
+  Cpu, Download, ExternalLink, Gauge, HeartHandshake, Keyboard, Laptop,
+  LockKeyhole, Mail, MessageSquareText, Mic2, Monitor, Play, ShieldCheck,
+  Sparkles, Users, Video, X, Zap,
 } from 'lucide-react';
 import type { User } from '@/lib/types';
 import { loginAccount, registerAccount, requestPasswordReset, resetPassword } from '@/lib/api';
@@ -17,6 +18,11 @@ const COPY = {
     support: 'Rozpoznaj materiał w jednym z 25 języków europejskich i przygotuj polską lub angielską wersję z zachowanym rytmem wypowiedzi oraz oryginalnym tłem.',
     start: 'Rozpocznij projekt', see: 'Zobacz jak działa', proof: ['25 języków wejściowych', 'Dubbing po polsku i angielsku', 'Eksport WAV i MP4'],
     capabilities: [['Wielojęzyczna transkrypcja', '25 języków, TXT, SRT i VTT'], ['Tłumaczenie kontekstowe', 'Z dowolnego obsługiwanego języka'], ['Naturalne głosy PL i EN', 'Tempo dopasowane do filmu'], ['Gotowy materiał', 'Miks audio i eksport MP4']],
+    flowNav: 'NupicAI Flow', flowLabel: 'Aplikacja na komputer', flowTitle: 'Mów zamiast pisać. W dowolnym oknie.',
+    flowIntro: 'NupicAI Flow zamienia mowę w tekst i wstawia ją tam, gdzie znajduje się kursor: do asystenta AI, poczty, komunikatora, Worda, CRM albo notatnika. Mówisz naturalnym tempem zamiast wpisywać każde zdanie ręcznie.',
+    flowBenefits: [['Jedna pływająca ikona', 'Dyktowanie jest zawsze pod ręką, bez przełączania się między oknami.'], ['Mikrofon lub dźwięk systemu', 'Transkrybuj własną wypowiedź, spotkanie, film lub materiał odtwarzany na komputerze.'], ['Lokalne wykrywanie mowy', 'Silero VAD odrzuca ciszę na urządzeniu, zanim fragment mowy trafi do transkrypcji.'], ['To samo konto NupicAI', 'Aplikacja korzysta z konta utworzonego w studio i przypisuje transkrypcje do zalogowanego użytkownika.']],
+    flowDownload: 'Pobierz', flowUnavailable: 'W przygotowaniu', flowLinux: 'Linux', flowWindows: 'Windows', flowPrivacy: 'VAD działa lokalnie. Wybrane fragmenty mowy są bezpiecznie wysyłane do serwera NupicAI w celu rozpoznania tekstu.',
+    flowVisualTitle: 'NupicAI Flow', flowVisualStatus: 'Gotowy do dyktowania', flowVisualText: 'Powiedz, co chcesz napisać. Tekst pojawi się w aktywnym polu.', flowAlt: 'Aplikacja NupicAI Flow do dyktowania tekstu w dowolnym programie',
     workflowLabel: 'Jeden przepływ pracy', workflowTitle: 'Od materiału źródłowego do gotowego dubbingu', workflowIntro: 'Każdy etap możesz sprawdzić i poprawić przed uruchomieniem następnego.',
     workflow: [['Dodaj materiał', 'Prześlij audio, wideo albo wklej adres filmu z YouTube.'], ['Sprawdź tekst', 'Parakeet tworzy transkrypcję z czasami, którą możesz edytować.'], ['Przetłumacz', 'Wybierz język polski lub angielski. Segmenty pozostają powiązane ze źródłem.'], ['Wybierz głos i eksportuj', 'WęgorzAI generuje dubbing, a mikser łączy go z oryginalnym tłem.']],
     modelLabel: 'Polska technologia', modelTitle: 'Własny model mowy, zaprojektowany z myślą o języku polskim',
@@ -31,7 +37,7 @@ const COPY = {
     storyLabel: 'Jak powstało NupicAI', storyTitle: 'Projekt dwóch braci, nie korporacyjne laboratorium', storyText: 'Modele i aplikacja powstały samodzielnie na prywatnym sprzęcie, w tym pojedynczej karcie RTX 3090. Budujemy narzędzie, które ma być użyteczne, uczciwie wycenione i rozwijane na podstawie realnych nagrań użytkowników.',
     limitsTitle: 'Nie udajemy, że model jest idealny', limits: ['Rzadkie nazwiska i nowe zapożyczenia mogą wymagać korekty zapisu.', 'W trudnych nagraniach mogą sporadycznie pojawić się trzaski, skrócone końcówki lub nietypowa wymowa.', 'Automatyczny dubbing warto odsłuchać przed publikacją. Zgłoszone przypadki wykorzystujemy do dalszego doskonalenia systemu.'],
     privacyLabel: 'Twoje dane', privacyTitle: 'Pliki robocze nie zostają na serwerze bezterminowo',
-    privacy: [['Osobna przestrzeń konta', 'Zadania i pliki każdego użytkownika są odseparowane i dostępne tylko po zalogowaniu.'], ['Automatyczne usuwanie', 'Materiały źródłowe, dubbing i pliki robocze są automatycznie usuwane po 24 godzinach.'], ['Jasne zasady przetwarzania', 'Audio jest przetwarzane lokalnie. Przy tłumaczeniu tekst może zostać wysłany do skonfigurowanego API językowego.']],
+    privacy: [['Osobna przestrzeń konta', 'Zadania i pliki każdego użytkownika są odseparowane i dostępne tylko po zalogowaniu.'], ['Automatyczne usuwanie', 'Materiały źródłowe, dubbing i pliki robocze są automatycznie usuwane po 24 godzinach.'], ['Jasne zasady przetwarzania', 'Audio trafia do infrastruktury NupicAI w celu transkrypcji. Przy tłumaczeniu tekst może zostać wysłany do skonfigurowanego API językowego.']],
     pricingLabel: 'Planowany cennik', pricingTitle: 'Płać za minuty gotowego materiału', pricingIntro: 'Nowe konto otrzymuje 5 minut bezpłatnego renderingu. Plan Creator odpowiada 7,80 zł za godzinę limitu, a Studio 6,60 zł za godzinę, bez przenoszenia projektu między kilkoma usługami.',
     plans: [
       { name: 'Bezpłatny', price: '0 zł', note: '5 minut na start', features: ['Pełny workflow', 'Eksport napisów', 'WAV i MP4'] },
@@ -47,6 +53,7 @@ const COPY = {
       ['Jakie języki rozpoznaje NupicAI?', 'Transkrypcja obsługuje 25 języków europejskich, między innymi polski, angielski, niemiecki, francuski, hiszpański, włoski, ukraiński i rosyjski. Gotowy dubbing jest obecnie generowany po polsku lub angielsku.'],
       ['Czy mogę poprawić transkrypcję i tłumaczenie?', 'Tak. Przed dubbingiem możesz edytować każdy segment i zachować jego położenie na osi czasu.'],
       ['Czy system zachowuje muzykę i dźwięki z filmu?', 'Tak. Mikser może zachować oryginalne tło oraz automatycznie ściszać je podczas wypowiedzi lektora.'],
+      ['Czy NupicAI Flow korzysta z tego samego konta?', 'Tak. Logujesz się danymi ze studia NupicAI. Wykrywanie ciszy działa lokalnie, a wybrane fragmenty mowy są wysyłane do serwera w celu transkrypcji.'],
       ['Czy NupicAI jest nieomylne?', 'Nie. Rzadkie nazwiska, słaba jakość nagrania i nietypowa wymowa mogą wymagać ręcznej korekty tekstu lub segmentu.'],
     ],
     ctaTitle: 'Twój materiał może mówić po polsku lub angielsku.', ctaText: 'Załóż konto i przygotuj pierwszy projekt w jednym studio.', cta: 'Rozpocznij bezpłatnie', footer: '© 2026 ZróbEbooka. Wszelkie prawa zastrzeżone.', company: 'Tomasz Gasior IT · ul. Spokojna 2, 20-074 Lublin · NIP: 9182117616', built: 'Zbudowane w Polsce', contact: 'Kontakt z twórcą', privacyLink: 'Prywatność',
@@ -58,6 +65,11 @@ const COPY = {
     support: 'Transcribe media in 25 European languages and create a polished Polish or English version while preserving pacing and the original background.',
     start: 'Start a project', see: 'See how it works', proof: ['25 input languages', 'Polish and English dubbing', 'WAV and MP4 export'],
     capabilities: [['Multilingual transcription', '25 languages, TXT, SRT and VTT'], ['Context-aware translation', 'From any supported language'], ['Natural Polish and English voices', 'Pacing matched to video'], ['Publish-ready media', 'Audio mix and MP4 export']],
+    flowNav: 'NupicAI Flow', flowLabel: 'Desktop application', flowTitle: 'Speak instead of typing. In any app.',
+    flowIntro: 'NupicAI Flow turns speech into text and inserts it wherever your cursor is: an AI assistant, email, messenger, Word, CRM or notes app. Speak naturally instead of typing every sentence by hand.',
+    flowBenefits: [['One floating control', 'Dictation stays within reach without switching between windows.'], ['Microphone or system audio', 'Transcribe your voice, a meeting, video or any audio playing on your computer.'], ['On-device speech detection', 'Silero VAD removes silence locally before a speech segment is sent for transcription.'], ['Your existing NupicAI account', 'The desktop app uses your studio account and assigns transcripts to the authenticated user.']],
+    flowDownload: 'Download', flowUnavailable: 'Coming soon', flowLinux: 'Linux', flowWindows: 'Windows', flowPrivacy: 'VAD runs locally. Selected speech segments are securely sent to the NupicAI server for transcription.',
+    flowVisualTitle: 'NupicAI Flow', flowVisualStatus: 'Ready for dictation', flowVisualText: 'Say what you want to write. Text appears in the active field.', flowAlt: 'NupicAI Flow desktop application for dictating into any program',
     workflowLabel: 'One production flow', workflowTitle: 'From source media to finished dubbing', workflowIntro: 'Review and edit every stage before starting the next one.',
     workflow: [['Add your media', 'Upload audio or video, or paste a YouTube link.'], ['Review the transcript', 'Parakeet creates an editable time-aligned transcript.'], ['Translate', 'Choose Polish or English. Every segment stays linked to the source.'], ['Choose a voice and export', 'WęgorzAI generates the voice while the mixer preserves the original background.']],
     modelLabel: 'Technology built in Poland', modelTitle: 'A proprietary speech model designed around Polish',
@@ -72,7 +84,7 @@ const COPY = {
     storyLabel: 'How NupicAI was built', storyTitle: 'A two-brother project, not a corporate lab', storyText: 'The models and application were developed independently on privately owned hardware, including a single RTX 3090. We are building a practical, fairly priced tool guided by real production material.',
     limitsTitle: 'We do not pretend the model is perfect', limits: ['Rare names and new loanwords may need a spelling adjustment.', 'Difficult recordings can occasionally produce clicks, shortened endings or unusual pronunciation.', 'Review automated dubbing before publishing. Reported cases guide further model improvements.'],
     privacyLabel: 'Your data', privacyTitle: 'Working files do not remain on the server indefinitely',
-    privacy: [['Private account workspace', 'Every user’s jobs and files are isolated and only available after authentication.'], ['Automatic deletion', 'Source media, dubbing and working files are automatically removed after 24 hours.'], ['Transparent processing', 'Audio is processed locally. Translation text may be sent to the configured language API.']],
+    privacy: [['Private account workspace', 'Every user’s jobs and files are isolated and only available after authentication.'], ['Automatic deletion', 'Source media, dubbing and working files are automatically removed after 24 hours.'], ['Transparent processing', 'Audio is sent to NupicAI infrastructure for transcription. Translation text may be sent to the configured language API.']],
     pricingLabel: 'Planned pricing', pricingTitle: 'Pay for minutes of finished media', pricingIntro: 'Every new account includes 5 free rendering minutes. Creator works out to roughly €1.80 per hour of allowance and Studio to roughly €1.53, with the entire workflow in one service.',
     plans: [
       { name: 'Free', price: '€0', note: '5 minutes to get started', features: ['Complete workflow', 'Subtitle export', 'WAV and MP4'] },
@@ -88,6 +100,7 @@ const COPY = {
       ['Which languages can NupicAI recognize?', 'Transcription supports 25 European languages, including Polish, English, German, French, Spanish, Italian, Ukrainian and Russian. Finished dubbing is currently generated in Polish or English.'],
       ['Can I edit the transcript and translation?', 'Yes. You can edit every segment before dubbing while retaining its place on the timeline.'],
       ['Does the system preserve music and sound effects?', 'Yes. The mixer can retain the original background and automatically duck it while the new voice is speaking.'],
+      ['Does NupicAI Flow use the same account?', 'Yes. Sign in with your NupicAI studio credentials. Silence detection runs locally, while selected speech segments are sent to the server for transcription.'],
       ['Is NupicAI always perfect?', 'No. Rare names, low-quality recordings and unusual pronunciation may require a manual text or segment correction.'],
     ],
     ctaTitle: 'Your media can speak Polish or English.', ctaText: 'Create an account and prepare your first project in one studio.', cta: 'Start for free', footer: '© 2026 ZróbEbooka. All rights reserved.', company: 'Tomasz Gasior IT · ul. Spokojna 2, 20-074 Lublin, Poland · VAT ID: PL9182117616', built: 'Built in Poland', contact: 'Contact the creator', privacyLink: 'Privacy',
@@ -96,6 +109,7 @@ const COPY = {
 };
 
 type AuthMode = 'login' | 'register' | 'forgot' | 'reset';
+type DesktopDownload = { platform: 'linux' | 'windows'; available: boolean; url: string | null; size_bytes: number | null; filename: string | null };
 
 export default function LandingPage({ onAuthenticated, authenticatedUser, onOpenStudio }: {
   onAuthenticated: (user: User) => void;
@@ -106,6 +120,7 @@ export default function LandingPage({ onAuthenticated, authenticatedUser, onOpen
   const c = COPY[locale];
   const [authMode, setAuthMode] = useState<AuthMode | null>(null);
   const [resetToken, setResetToken] = useState('');
+  const [downloads, setDownloads] = useState<DesktopDownload[]>([]);
 
   useEffect(() => {
     const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('reset_token') ?? '';
@@ -115,6 +130,13 @@ export default function LandingPage({ onAuthenticated, authenticatedUser, onOpen
     }
   }, []);
 
+  useEffect(() => {
+    fetch('/api/desktop-downloads')
+      .then(response => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
+      .then(data => setDownloads(Array.isArray(data?.downloads) ? data.downloads : []))
+      .catch(() => setDownloads([]));
+  }, []);
+
   const openStudio = () => authenticatedUser ? onOpenStudio?.() : setAuthMode('register');
   return <div className="marketing-page">
     <header className="marketing-nav">
@@ -122,6 +144,7 @@ export default function LandingPage({ onAuthenticated, authenticatedUser, onOpen
         <img src="/brand/logo.png" alt="NupicAI" width={2172} height={724} />
       </a>
       <nav aria-label={locale === 'pl' ? 'Nawigacja strony' : 'Page navigation'}>
+        <a href="#flow">{c.flowNav}</a>
         <a href="#jak-dziala">{c.nav[0]}</a>
         <a href="#dla-kogo">{c.nav[1]}</a>
         <a href="#cennik">{c.nav[2]}</a>
@@ -155,6 +178,43 @@ export default function LandingPage({ onAuthenticated, authenticatedUser, onOpen
 
       <section className="proof-band" aria-label={locale === 'pl' ? 'Możliwości NupicAI' : 'NupicAI capabilities'}>
         {[FileText, Languages, Mic2, Video].map((Icon, index) => <div key={c.capabilities[index][0]}><Icon size={21} /><strong>{c.capabilities[index][0]}</strong><span>{c.capabilities[index][1]}</span></div>)}
+      </section>
+
+      <section className="flow-band" id="flow">
+        <div className="flow-band-inner">
+          <div className="flow-copy">
+            <span className="section-label">{c.flowLabel}</span>
+            <h2>{c.flowTitle}</h2>
+            <p className="flow-intro">{c.flowIntro}</p>
+            <div className="flow-benefits">
+              {[MessageSquareText, AudioLines, Mic2, LockKeyhole].map((Icon, index) => <div key={c.flowBenefits[index][0]}><Icon size={19} /><span><strong>{c.flowBenefits[index][0]}</strong><p>{c.flowBenefits[index][1]}</p></span></div>)}
+            </div>
+            <div className="flow-downloads">
+              {(['linux', 'windows'] as const).map((platform, index) => {
+                const item = downloads.find(entry => entry.platform === platform);
+                const label = platform === 'linux' ? c.flowLinux : c.flowWindows;
+                const Icon = index === 0 ? Laptop : Monitor;
+                return item?.available && item.url
+                  ? <a key={platform} className="button button-primary button-large" href={item.url}><Icon size={17} />{c.flowDownload} {label}<Download size={15} /></a>
+                  : <span key={platform} className="button button-secondary button-large flow-download-disabled" aria-disabled="true"><Icon size={17} />{label} · {c.flowUnavailable}</span>;
+              })}
+            </div>
+            <p className="flow-privacy"><ShieldCheck size={15} />{c.flowPrivacy}</p>
+          </div>
+          <div className="flow-product-visual" role="img" aria-label={c.flowAlt}>
+            <div className="flow-window">
+              <div className="flow-window-bar"><img src="/brand/mark.png" alt="" width={28} height={28} /><strong>{c.flowVisualTitle}</strong><span><Mic2 size={14} /> Mic</span></div>
+              <div className="flow-window-body">
+                <div className="flow-wave" aria-hidden="true">{[18, 32, 48, 26, 58, 38, 22, 44, 30, 52, 25, 35].map((height, index) => <i key={index} style={{ height }} />)}</div>
+                <img src="/brand/mark.png" alt="" width={1254} height={1254} />
+                <strong>{c.flowVisualStatus}</strong>
+                <p>{c.flowVisualText}</p>
+                <div className="flow-insert-target"><Keyboard size={16} /><span>Chat · Email · Docs · CRM</span></div>
+              </div>
+            </div>
+            <div className="flow-floating-control"><img src="/brand/mark.png" alt="" width={1254} height={1254} /><span><AudioLines size={15} /></span></div>
+          </div>
+        </div>
       </section>
 
       <section className="marketing-section workflow-section" id="jak-dziala">

@@ -14,20 +14,31 @@ pub struct AppSettings {
     pub input_device: String,
     pub polish: bool,
     pub auto_paste: bool,
-    pub shortcut: String,
+    #[serde(alias = "shortcut")]
+    pub shortcut_hold: String,
+    pub shortcut_toggle: String,
+    pub shortcut_continuous: String,
+    pub language: String,
+    // Kept for migration from builds which used one shortcut and a mode selector.
+    #[serde(skip_serializing)]
     pub activation_mode: String,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            server_url: "http://127.0.0.1:8765".into(),
+            server_url: option_env!("NUPICAI_SERVER_URL")
+                .unwrap_or("http://127.0.0.1:8765")
+                .into(),
             email: String::new(),
             input_source: "microphone".into(),
             input_device: String::new(),
             polish: false,
             auto_paste: true,
-            shortcut: "Ctrl+Alt+Space".into(),
+            shortcut_hold: "Ctrl+Alt+Space".into(),
+            shortcut_toggle: "Ctrl+Alt+D".into(),
+            shortcut_continuous: "Ctrl+Alt+V".into(),
+            language: "auto".into(),
             activation_mode: "hold".into(),
         }
     }
@@ -44,7 +55,7 @@ fn legacy_config_path() -> Option<PathBuf> {
 }
 
 pub fn load() -> AppSettings {
-    config_path()
+    let mut settings: AppSettings = config_path()
         .ok()
         .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -53,7 +64,11 @@ pub fn load() -> AppSettings {
                 .and_then(|path| fs::read_to_string(path).ok())
                 .and_then(|raw| serde_json::from_str(&raw).ok())
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if settings.shortcut_hold.trim().is_empty() {
+        settings.shortcut_hold = AppSettings::default().shortcut_hold;
+    }
+    settings
 }
 
 pub fn save(settings: &AppSettings) -> Result<(), String> {
@@ -95,9 +110,37 @@ pub fn load_session() -> Option<String> {
         })
         .filter(|token| !token.is_empty());
     if let Some(token) = legacy.as_deref() {
-        let _ = save_session(token);
+        if save_session(token).is_ok() {
+            scrub_legacy_session();
+        }
     }
     legacy
+}
+
+fn scrub_legacy_session() {
+    let Some(path) = legacy_config_path() else {
+        return;
+    };
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if object.remove("session_token").is_none() {
+        return;
+    }
+    if let Ok(body) = serde_json::to_vec_pretty(&value) {
+        let _ = fs::write(&path, body);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+    }
 }
 
 pub fn save_session(token: &str) -> Result<(), String> {
@@ -109,5 +152,19 @@ pub fn save_session(token: &str) -> Result<(), String> {
 pub fn clear_session() {
     if let Ok(entry) = entry() {
         let _ = entry.delete_credential();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn legacy_single_shortcut_migrates_to_hold() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"shortcut":"Ctrl+Shift+Space","activation_mode":"toggle"}"#)
+                .expect("legacy settings should deserialize");
+        assert_eq!(settings.shortcut_hold, "Ctrl+Shift+Space");
+        assert_eq!(settings.shortcut_toggle, "Ctrl+Alt+D");
     }
 }

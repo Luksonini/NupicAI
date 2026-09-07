@@ -5,12 +5,13 @@ Native Tauri 2 dictation client for the NupicAI server.
 ## Included in the first native build
 
 - compact NupicAI recording window with a live microphone meter,
-- global `Ctrl+Alt+Space` push-to-talk shortcut,
-- hold-to-talk, shortcut toggle and continuous Silero VAD activation modes,
+- independent global shortcuts for hold-to-talk, toggle and continuous Silero VAD,
 - local speech endpointing with pre-roll, silence skipping and phrase-by-phrase paste,
 - native microphone capture through CPAL,
 - system-audio capture through PipeWire/PulseAudio on Linux and WASAPI loopback on Windows,
 - selectable input device,
+- live input diagnostics and a one-click microphone/system-audio switch,
+- Polish and English UI selected automatically from the operating-system locale,
 - NupicAI login with the session token stored in the operating-system credential store,
 - direct upload to `/dictation/transcribe`,
 - optional `/dictation/polish` pass,
@@ -19,9 +20,12 @@ Native Tauri 2 dictation client for the NupicAI server.
 
 ## Activation modes
 
-- `Hold`: recording lasts while the global shortcut is held.
-- `Toggle`: one press starts recording and the next press transcribes it.
-- `Auto VAD`: one press starts continuous listening. A bundled Silero VAD keeps 320 ms of pre-roll, ignores silence, and submits each completed phrase after roughly 600 ms of silence. Press the shortcut again to stop.
+- `Hold` (`Ctrl+Alt+Space` by default): recording lasts while its shortcut is held.
+- `Toggle` (`Ctrl+Alt+D`): one press starts recording and the next press transcribes it.
+- `Auto VAD` (`Ctrl+Alt+V`): one press starts continuous listening. A bundled Silero VAD keeps roughly 500 ms of pre-roll, ignores silence, and submits each completed phrase after roughly 600 ms of silence. Continuous speech is flushed every six seconds with an overlap that the UI reconciles. Press the shortcut again to stop.
+
+All three shortcuts can be changed independently. Existing installations automatically
+migrate their old single shortcut to the hold-to-talk action.
 
 `Auto VAD` performs phrase-level near-real-time transcription. The current Parakeet TDT server model is full-context, so partial words are not emitted while a phrase is still being spoken.
 
@@ -53,15 +57,32 @@ On an already configured development machine, the shortest command is:
 ./run.sh
 ```
 
-Build a release binary:
+Install the Tauri packaging CLI once:
+
+```bash
+cargo install tauri-cli --version '^2' --locked
+```
+
+Build Linux installers for a production server:
 
 ```bash
 cd nupic-flow-tauri
-cargo build --release -p nupic-flow
+./build-linux.sh https://nupicai.example.com
 ```
 
-The binary is written to `target/release/nupic-flow`. Packaging as AppImage, DEB, RPM,
-MSI or NSIS is the next release step after behavior is validated on Linux and Windows.
+This creates an AppImage and DEB. The AppImage is copied to the website's ignored
+`runtime/downloads` directory and immediately becomes available through the Linux
+download button.
+
+Build the Windows installer on a Windows machine with Rust, Microsoft C++ Build Tools,
+WebView2 and `cargo-tauri` installed:
+
+```powershell
+.\build-windows.ps1 https://nupicai.example.com
+```
+
+The NSIS `.exe` is copied to `runtime\downloads` and activates the Windows button.
+Do not publish packages built with the default `127.0.0.1` development address.
 
 ## Fedora build dependencies
 

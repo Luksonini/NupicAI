@@ -7,10 +7,11 @@ const START_THRESHOLD: f32 = 0.55;
 const END_THRESHOLD: f32 = 0.35;
 const START_FRAMES: usize = 2;
 const END_FRAMES: usize = 19;
-const PRE_ROLL_FRAMES: usize = 10;
+const PRE_ROLL_FRAMES: usize = 16;
 const POST_ROLL_FRAMES: usize = 6;
 const MIN_SPEECH_SAMPLES: usize = RATE / 4;
-const MAX_UTTERANCE_SAMPLES: usize = RATE * 30;
+const MAX_UTTERANCE_SAMPLES: usize = RATE * 6;
+const STREAM_OVERLAP_SAMPLES: usize = RATE / 2;
 
 pub struct VadUpdate {
     pub speech_started: bool,
@@ -109,21 +110,28 @@ impl VoiceActivityDetector {
             let trim = (END_FRAMES - POST_ROLL_FRAMES) * FRAME;
             self.utterance
                 .truncate(self.utterance.len().saturating_sub(trim));
-            return self.take_utterance();
+            return self.take_utterance(false);
         }
         if self.utterance.len() >= MAX_UTTERANCE_SAMPLES {
-            return self.take_utterance();
+            return self.take_utterance(true);
         }
         None
     }
 
-    fn take_utterance(&mut self) -> Option<Vec<f32>> {
+    fn take_utterance(&mut self, keep_overlap: bool) -> Option<Vec<f32>> {
         self.active = false;
         self.speech_frames = 0;
         self.silence_frames = 0;
         self.stream.reset();
-        self.pre_roll.clear();
         let utterance = std::mem::take(&mut self.utterance);
+        self.pre_roll.clear();
+        if keep_overlap {
+            self.pre_roll.extend(
+                utterance[utterance.len().saturating_sub(STREAM_OVERLAP_SAMPLES)..]
+                    .iter()
+                    .copied(),
+            );
+        }
         (utterance.len() >= MIN_SPEECH_SAMPLES).then_some(utterance)
     }
 

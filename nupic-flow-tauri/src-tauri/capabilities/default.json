@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
-  "description": "Permissions required by the NupicAI Flow main window",
-  "windows": ["main"],
+  "description": "Permissions required by the NupicAI Flow windows",
+  "windows": ["main", "dictation"],
   "permissions": [
     "core:default",
     "clipboard-manager:allow-write-text"
