@@ -30,10 +30,10 @@ jobs:
       - name: Validate server URL
         shell: bash
         run: |
-          [[ "$NUPICAI_SERVER_URL" == https://* ]] || {
-            echo "Set an HTTPS server_url input or repository variable NUPICAI_SERVER_URL."
-            exit 2
-          }
+          case "$NUPICAI_SERVER_URL" in
+            https://*|http://127.0.0.1*|http://localhost*) ;;
+            *) echo "Use HTTPS, or localhost only for a test build."; exit 2 ;;
+          esac
       - name: Install native dependencies
         run: |
           sudo apt-get update
@@ -68,10 +68,10 @@ jobs:
       - name: Validate server URL
         shell: bash
         run: |
-          [[ "$NUPICAI_SERVER_URL" == https://* ]] || {
-            echo "Set an HTTPS server_url input or repository variable NUPICAI_SERVER_URL."
-            exit 2
-          }
+          case "$NUPICAI_SERVER_URL" in
+            https://*|http://127.0.0.1*|http://localhost*) ;;
+            *) echo "Use HTTPS, or localhost only for a test build."; exit 2 ;;
+          esac
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

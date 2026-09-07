@@ -46,7 +46,8 @@ a local Windows development machine.
 1. In GitHub, open **Settings -> Secrets and variables -> Actions -> Variables**.
 2. Add `NUPICAI_SERVER_URL` with the public HTTPS address of the backend.
 3. For a test build, open **Actions -> Desktop installers -> Run workflow** and
-   provide the same URL. Download both artifacts from the completed run.
+   provide the same URL. `http://127.0.0.1:8765` is accepted for local testing;
+   public builds require HTTPS. Download both artifacts from the completed run.
 4. For a permanent GitHub Release, increment the application version, commit it,
    and push a tag such as `flow-v0.1.0`.
 
