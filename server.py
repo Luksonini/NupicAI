@@ -129,6 +129,11 @@ if TTS_CKPT is None or not Path(TTS_CKPT).exists():
     )
 
 _MASKGIT_CONTINUITY_CKPT = MODELS_LOCAL / "tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt"
+_SHARED_REFERENCE_CKPT = (
+    Path(os.environ["WEGORZ_SHARED_REFERENCE_CKPT"]).expanduser()
+    if str(os.environ.get("WEGORZ_SHARED_REFERENCE_CKPT", "")).strip()
+    else None
+)
 _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
     "mini_dualpath": {
         "label": "MiniDualPath learned voice",
@@ -141,6 +146,12 @@ _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
         "checkpoint": _MASKGIT_CONTINUITY_CKPT,
     },
 }
+if _SHARED_REFERENCE_CKPT is not None:
+    _TTS_MODEL_PROFILES_RAW["shared_reference_experimental"] = {
+        "label": "Shared reference zero-shot (experimental)",
+        "description": "shared reference encoder: voice + style + 16 local prosody tokens",
+        "checkpoint": _SHARED_REFERENCE_CKPT,
+    }
 TTS_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     key: rec for key, rec in _TTS_MODEL_PROFILES_RAW.items()
     if Path(rec["checkpoint"]).exists()
@@ -357,6 +368,11 @@ def _resolve_tts_profile(profile: str | None) -> tuple[str, Path]:
 
 def _tts_continuity_enabled(profile: str | None) -> bool:
     return str(profile or "").strip() == "maskgit_continuity"
+
+
+def _tts_content_min_frames(profile: str | None) -> int:
+    key = str(profile or "").strip()
+    return 2 if key in {"maskgit_continuity", "shared_reference_experimental"} else 1
 
 
 def _stop_daemon_locked() -> None:
@@ -1939,6 +1955,7 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
                     "digital_silence": req.digital_silence,
                     "pause_edge_frames": req.pause_edge_frames,
                     "leading_sp_min_frames": 4,
+                    "content_min_frames": _tts_content_min_frames(req.tts_model_profile),
                     "short_continuity_ms": req.short_continuity_ms,
                     "emotion_group": req.emotion_group,
                     "emotion_strength": req.emotion_strength,
@@ -2816,7 +2833,7 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
                 # In free-text synthesis there is no external timing budget.
                 # One 10.7 ms frame is not enough for a reliable content phoneme,
                 # especially with categorical MaskGIT durations.
-                "content_min_frames": 2 if _tts_continuity_enabled(req.tts_model_profile) else 1,
+                "content_min_frames": _tts_content_min_frames(req.tts_model_profile),
                 "trailing_sp_min_frames": 4,
                 "short_continuity_ms": req.short_continuity_ms,
                 "emotion_group": req.emotion_group,
