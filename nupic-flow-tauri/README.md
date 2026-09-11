@@ -2,6 +2,23 @@
 
 Native Tauri 2 dictation client for the NupicAI server.
 
+## Packaging status
+
+The application source and reproducible packaging workflow are ready. Installer
+binaries are not stored in Git and are not present in a fresh clone. A release
+build must be given the public HTTPS URL of the NupicAI backend.
+
+Expected artifacts:
+
+```text
+nupicai-flow-linux-x86_64.AppImage
+nupicai-flow-linux-amd64.deb
+nupicai-flow-windows-x86_64.exe
+```
+
+The website serves files copied to the ignored `../runtime/downloads/` directory.
+Until an artifact exists there, its download button is shown as unavailable.
+
 ## Included in the first native build
 
 - compact NupicAI recording window with a live microphone meter,
@@ -83,6 +100,25 @@ WebView2 and `cargo-tauri` installed:
 
 The NSIS `.exe` is copied to `runtime\downloads` and activates the Windows button.
 Do not publish packages built with the default `127.0.0.1` development address.
+
+## GitHub build and release
+
+Set the repository Actions variable `NUPICAI_SERVER_URL` to the public HTTPS
+backend address. A manual run of `Desktop installers` produces downloadable CI
+artifacts. Pushing a version tag builds both platforms and creates a release:
+
+```bash
+git tag flow-v0.1.0
+git push origin flow-v0.1.0
+```
+
+The repository is private, so GitHub release links are not suitable as public
+website links without authentication. Download the three release artifacts and
+place them in the production server's `runtime/downloads/` directory. The backend
+then exposes stable `/downloads/linux` and `/downloads/windows` URLs.
+
+Before publishing, verify the embedded default URL, log in using a test account,
+test microphone and system-audio capture, and confirm paste behavior on each OS.
 
 ## Fedora build dependencies
 

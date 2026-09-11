@@ -16,8 +16,8 @@ const EMPTY_FORM = {
   translation_api_key: '',
   clear_translation_api_key: false,
   tts_profile: '',
-  mel_steps_first: 8,
-  mel_steps_second: 3,
+  mel_steps_first: 10,
+  mel_steps_second: 0,
   mel_twopass_t_noise: 0.12,
 };
 

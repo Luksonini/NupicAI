@@ -40,12 +40,12 @@ Plik checkpointu ma okolo 1.9 GB. Nie wystarczy wyslac samego kodu.
 Po zalogowaniu jako administrator wejdz do panelu administratora i wybierz `TDA-MaskGIT continuity`. Zalecane ustawienia startowe zgodne z dotychczasowym inference:
 
 ```text
-first pass: 8
-second pass: 3
+first pass: 10
+second pass: 0
 t_noise: 0.12
 ```
 
-Zmiana jest odwracalna bez kasowania plikow. W panelu wybierz ponownie `StyleEnc128 LSTM` albo `MiniDualPath learned voice`. Ustawienie trafia do prywatnego pliku runtime `admin_config.json` i obowiazuje nowe zadania.
+Zmiana jest odwracalna bez kasowania plikow. W panelu wybierz ponownie `MiniDualPath learned voice`. Ustawienie trafia do prywatnego pliku runtime `admin_config.json` i obowiazuje nowe zadania.
 
 ## Zachowanie pamieci
 
@@ -54,7 +54,7 @@ Zmiana jest odwracalna bez kasowania plikow. W panelu wybierz ponownie `StyleEnc
 - Zmiana lektora nie miesza stanow.
 - Nowe zadanie zaczyna od pustej pamieci.
 - Dla profilu continuity nie uzywamy cache gotowych segmentow, poniewaz sam WAV nie odtwarza wewnetrznego stanu potrzebnego kolejnemu segmentowi.
-- Dwa starsze profile zachowuja dotychczasowe, niezalezne segmenty.
+- Starszy profil MiniDualPath zachowuje dotychczasowe, niezalezne segmenty.
 
 ## Kontrola przed uruchomieniem
 

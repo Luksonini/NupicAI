@@ -128,18 +128,12 @@ if TTS_CKPT is None or not Path(TTS_CKPT).exists():
         "No usable TTS checkpoint found. Set WEGORZ_TTS_CKPT or restore one of the configured checkpoints."
     )
 
-_STYLEENC128_COMPETE_CKPT = MODELS_LOCAL / "tts/checkpoints/styleenc128_lstm.pt"
 _MASKGIT_CONTINUITY_CKPT = MODELS_LOCAL / "tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt"
 _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
     "mini_dualpath": {
         "label": "MiniDualPath learned voice",
         "description": "learned speaker/style tables + gauss-cross flow + MiniDualPath duration",
         "checkpoint": Path(TTS_CKPT),
-    },
-    "styleenc128_lstm": {
-        "label": "StyleEnc128 LSTM",
-        "description": "trainable style encoder checkpoint + stateful LSTM duration",
-        "checkpoint": _STYLEENC128_COMPETE_CKPT,
     },
     "maskgit_continuity": {
         "label": "TDA-MaskGIT continuity",
@@ -151,7 +145,7 @@ TTS_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     key: rec for key, rec in _TTS_MODEL_PROFILES_RAW.items()
     if Path(rec["checkpoint"]).exists()
 }
-DEFAULT_TTS_PROFILE = str(os.environ.get("WEGORZ_TTS_PROFILE", "styleenc128_lstm")).strip() or "styleenc128_lstm"
+DEFAULT_TTS_PROFILE = str(os.environ.get("WEGORZ_TTS_PROFILE", "maskgit_continuity")).strip() or "maskgit_continuity"
 if DEFAULT_TTS_PROFILE not in TTS_MODEL_PROFILES:
     DEFAULT_TTS_PROFILE = next(iter(TTS_MODEL_PROFILES.keys()))
 TTS_CKPT = Path(TTS_MODEL_PROFILES[DEFAULT_TTS_PROFILE]["checkpoint"])
@@ -500,12 +494,11 @@ def _daemon_encode_ref_mel(audio_path: Path, out_dir: Path, *, start_sec: float 
     })
 
 
-# Training data: median=5.7s/76ch, p90=9.6s/176ch, p95=10.7s/197ch.
-# Splitting at clause boundaries (commas) causes BiLSTM to predict sentence-initial
-# pauses at chunk starts (0.15-0.2s dead air) which sounds like words being swallowed.
-# Prefer whole sentences in free-text TTS; PL p99 is ~294 chars, and the old
-# Polish-only Gradio used sentence chunks. Mid-sentence chunks are a stronger
-# hallucination risk than moderately long sentences.
+# Training data contains longer samples, but the production MaskGIT checkpoint
+# is more reliable when free text stays near the shorter training regime.
+# Splitting at clause boundaries can create sentence-initial pauses at chunk starts.
+# The explicit leading/trailing pause floor and cross-chunk memory now protect
+# boundaries, so avoid large MaskGIT budget corrections on 150+ character chunks.
 _TTS_MAX_CHARS = 120
 _TTS_HARD_SENTENCE_CHARS = 120
 _SENT_END_RE = re.compile(r'(?<=[.!?…])\s+')
@@ -535,18 +528,6 @@ _PL_OPEN_WORDS = frozenset({
 
 
 _TTS_MIN_CHUNK = 20  # chunks shorter than this get merged into previous
-_NEWS_DEMO_CHUNKS_PL = [
-    "Dzisiejszego wieczoru napływają doniesienia, ",
-    "że amerykańscy i irańscy negocjatorzy osiągnęli porozumienie ",
-    "w sprawie przedłużenia zawieszenia broni oraz rozpoczęcia negocjacji dotyczących programu nuklearnego Iranu. ",
-    "Donald Trump musi jednak wciąż zatwierdzić jakąkolwiek umowę ",
-    "w obliczu wymiany ognia między obiema stronami, która zagraża obecnemu rozejmowi. ",
-    "Irański Korpus Strażników Rewolucji Islamskiej twierdzi, ",
-    "że obrał za cel amerykańską bazę lotniczą w tym regionie. ",
-]
-_NEWS_DEMO_TEXT_NORM = " ".join("".join(_NEWS_DEMO_CHUNKS_PL).split()).lower()
-
-
 def _looks_sentence_final(text: str) -> bool:
     return bool(re.search(r'[.!?…]["”’)\]]*\s*$', str(text or "").strip()))
 
@@ -587,9 +568,6 @@ def _split_text_for_tts(
     text = text.strip()
     if not text:
         return []
-    if " ".join(text.split()).lower() == _NEWS_DEMO_TEXT_NORM:
-        return [c.strip() for c in _NEWS_DEMO_CHUNKS_PL if c.strip()]
-
     # A very short sentence at the start of a longer request (for example
     # "Tak. Dlaczego nie?") can be acoustically suppressed by the flow model.
     # Render that complete utterance separately; abbreviations are not sentences.
@@ -729,7 +707,7 @@ def _daemon_synth_chunked_response(base_req: dict[str, Any], out_dir: str, tag: 
             **base_req,
             "text": chunk,
             "tag": f"{tag}_c{i:02d}",
-            "continuity_reset": (i == 0) or bool(base_req.get("continuity_reset", False)),
+            "continuity_reset": bool(base_req.get("continuity_reset", False)) if i == 0 else False,
             "continuation_out": bool(continuation_out),
         }
         if i > 0:
@@ -883,8 +861,8 @@ core._CONFIG = {
     "translation_timeout_seconds": 180,
     "translation_retry": 2,
     "tts_profile": DEFAULT_TTS_PROFILE,
-    "mel_steps_first": 8,
-    "mel_steps_second": 3,
+    "mel_steps_first": 10,
+    "mel_steps_second": 0,
     "mel_twopass_t_noise": 0.12,
     "work_dir": str(_WORK),
     "outputs_dir": str(_WORK / "outputs"),
@@ -945,8 +923,8 @@ def _save_admin_config() -> None:
         "translation_batch_segments": int(core._CONFIG.get("translation_batch_segments", 8)),
         "translation_api_key": str(core._CONFIG.get("translation_api_key", "")),
         "tts_profile": str(core._CONFIG.get("tts_profile", DEFAULT_TTS_PROFILE)),
-        "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 8)),
-        "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 3)),
+        "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 10)),
+        "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 0)),
         "mel_twopass_t_noise": float(core._CONFIG.get("mel_twopass_t_noise", 0.12)),
     }
     tmp = ADMIN_CONFIG_PATH.with_suffix(".tmp")
@@ -1774,8 +1752,8 @@ class DubRequest(BaseModel):
     extra_tail_sec: float = 0.0
     dur_scale: float = 1.0           # unused, kept for compat
     dur_source: str = "prior_mu"     # unused, kept for compat
-    mel_steps_first: int = 8
-    mel_steps_second: int = 3
+    mel_steps_first: int = 10
+    mel_steps_second: int = 0
     mel_twopass_t_noise: float = 0.12
     digital_silence: bool = True
     pause_edge_frames: int = 10
@@ -2258,8 +2236,8 @@ class AdminSettingsRequest(BaseModel):
     translation_api_key: str = ""
     clear_translation_api_key: bool = False
     tts_profile: str = DEFAULT_TTS_PROFILE
-    mel_steps_first: int = 8
-    mel_steps_second: int = 3
+    mel_steps_first: int = 10
+    mel_steps_second: int = 0
     mel_twopass_t_noise: float = 0.12
 
 
@@ -2514,8 +2492,8 @@ async def admin_settings(_user: User = Depends(_require_admin_user)) -> dict[str
             {"key": key, "label": str(rec.get("label", key))}
             for key, rec in TTS_MODEL_PROFILES.items()
         ],
-        "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 8)),
-        "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 3)),
+        "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 10)),
+        "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 0)),
         "mel_twopass_t_noise": float(core._CONFIG.get("mel_twopass_t_noise", 0.12)),
         "tts_loaded_profiles": sorted(
             key for key, proc in _daemon_procs.items()
@@ -2591,8 +2569,8 @@ async def tts_models(user: User = Depends(_current_user)) -> dict[str, Any]:
             for key, rec in TTS_MODEL_PROFILES.items()
         ],
         "flow_defaults": {
-            "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 8)),
-            "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 3)),
+            "mel_steps_first": int(core._CONFIG.get("mel_steps_first", 10)),
+            "mel_steps_second": int(core._CONFIG.get("mel_steps_second", 0)),
             "mel_twopass_t_noise": float(core._CONFIG.get("mel_twopass_t_noise", 0.12)),
         },
     }
@@ -2798,8 +2776,8 @@ class TextTTSRequest(BaseModel):
     speed: float = 1.0
     dur_scale: float = 1.0    # unused, kept for frontend compat
     dur_source: str = "prior_mu"  # unused, kept for frontend compat
-    mel_steps_first: int = 8
-    mel_steps_second: int = 3
+    mel_steps_first: int = 10
+    mel_steps_second: int = 0
     mel_twopass_t_noise: float = 0.12
     digital_silence: bool = True
     pause_edge_frames: int = 10
@@ -2835,6 +2813,11 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
                 "digital_silence": req.digital_silence,
                 "pause_edge_frames": req.pause_edge_frames,
                 "leading_sp_min_frames": 4,
+                # In free-text synthesis there is no external timing budget.
+                # One 10.7 ms frame is not enough for a reliable content phoneme,
+                # especially with categorical MaskGIT durations.
+                "content_min_frames": 2 if _tts_continuity_enabled(req.tts_model_profile) else 1,
+                "trailing_sp_min_frames": 4,
                 "short_continuity_ms": req.short_continuity_ms,
                 "emotion_group": req.emotion_group,
                 "emotion_strength": req.emotion_strength,
@@ -2876,6 +2859,11 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
                 "text_in": dbg.get("text_in", ""),
                 "pred_sec": dbg.get("pred_sec"),
                 "mel_sec": dbg.get("mel_sec"),
+                "duration_infer_stats": dbg.get("duration_infer_stats", {}),
+                "text_chunk_index": dbg.get("text_chunk_index"),
+                "bridge_memory_available": dbg.get("bridge_memory_available"),
+                "rhythm_memory_available": dbg.get("rhythm_memory_available"),
+                "acoustic_memory_available": dbg.get("acoustic_memory_available"),
                 "token_count": len(tokens),
                 "tokens": tokens,
             })

@@ -61,9 +61,16 @@ class PipelineIntegrityTests(unittest.TestCase):
         profile, checkpoint = server._resolve_tts_profile("maskgit_continuity")
         self.assertEqual(profile, "maskgit_continuity")
         self.assertTrue(checkpoint.is_file())
+        self.assertEqual(server.DEFAULT_TTS_PROFILE, "maskgit_continuity")
+        self.assertNotIn("styleenc128_lstm", server.TTS_MODEL_PROFILES)
         self.assertTrue(server._tts_continuity_enabled(profile))
         self.assertFalse(server._tts_continuity_enabled("mini_dualpath"))
-        self.assertFalse(server._tts_continuity_enabled("styleenc128_lstm"))
+
+    def test_production_flow_defaults_use_one_ten_step_pass(self) -> None:
+        for request_type in (server.DubRequest, server.AdminSettingsRequest, server.TextTTSRequest):
+            request = request_type.model_construct()
+            self.assertEqual(request.mel_steps_first, 10)
+            self.assertEqual(request.mel_steps_second, 0)
 
     def test_configured_admin_account_is_visible_and_has_unlimited_usage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -398,6 +405,79 @@ class PipelineIntegrityTests(unittest.TestCase):
 
         abbreviation = "Dr. Kowalski rozpoczął spotkanie punktualnie."
         self.assertEqual(server._split_text_for_tts(abbreviation), [abbreviation])
+
+    def test_tts_default_chunk_stays_within_maskgit_reliable_range(self) -> None:
+        sentence = (
+            "To zdanie ma pozostać jednym fragmentem syntezy, ponieważ jego długość odpowiada "
+            "typowym dłuższym próbkom obecnym w zbiorze treningowym i nie wymaga sztucznej granicy."
+        )
+        self.assertGreater(len(sentence), 120)
+        chunks = server._split_text_for_tts(sentence)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= server._TTS_HARD_SENTENCE_CHARS for chunk in chunks))
+        self.assertEqual(" ".join(chunks), sentence)
+
+    def test_tts_chunking_preserves_caller_continuity_state(self) -> None:
+        calls: list[dict] = []
+
+        def fake_synth(req: dict) -> dict:
+            calls.append(dict(req))
+            wav = Path(req["out_dir"]) / f'{req["tag"]}.wav'
+            sf.write(wav, np.zeros(240, dtype=np.float32), 24000)
+            return {"wav": str(wav), "debug": {}}
+
+        text = "pierwszy fragment bez kropki drugi fragment bez kropki trzeci fragment końcowy"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            server, "_daemon_synth_response", side_effect=fake_synth,
+        ):
+            server._daemon_synth_chunked_response(
+                {
+                    "text": text,
+                    "out_dir": tmp,
+                    "continuity_key": "existing-stream",
+                    "continuity_reset": False,
+                    "tts_max_chars": 28,
+                    "tts_hard_sentence_chars": 28,
+                },
+                tmp,
+                "continuity_test",
+            )
+
+        self.assertGreater(len(calls), 1)
+        self.assertTrue(all(call["continuity_key"] == "existing-stream" for call in calls))
+        self.assertEqual([call["continuity_reset"] for call in calls], [False] * len(calls))
+        self.assertEqual(
+            [call["continuation_out"] for call in calls],
+            [True] * (len(calls) - 1) + [False],
+        )
+
+    def test_tts_chunking_resets_only_first_chunk_of_new_stream(self) -> None:
+        resets: list[bool] = []
+
+        def fake_synth(req: dict) -> dict:
+            resets.append(bool(req["continuity_reset"]))
+            wav = Path(req["out_dir"]) / f'{req["tag"]}.wav'
+            sf.write(wav, np.zeros(240, dtype=np.float32), 24000)
+            return {"wav": str(wav), "debug": {}}
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            server, "_daemon_synth_response", side_effect=fake_synth,
+        ):
+            server._daemon_synth_chunked_response(
+                {
+                    "text": "pierwszy długi fragment oraz drugi długi fragment bez końcowej kropki",
+                    "out_dir": tmp,
+                    "continuity_key": "new-stream",
+                    "continuity_reset": True,
+                    "tts_max_chars": 24,
+                    "tts_hard_sentence_chars": 24,
+                },
+                tmp,
+                "continuity_reset_test",
+            )
+
+        self.assertGreater(len(resets), 1)
+        self.assertEqual(resets, [True] + [False] * (len(resets) - 1))
 
     def test_translation_validation_rejects_missing_and_empty_items(self) -> None:
         check = server.core._check_numbered_indices({1: "jeden", 2: ""}, [1, 2, 3])

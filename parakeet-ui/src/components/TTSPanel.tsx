@@ -134,7 +134,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
   const [speechLang, setSpeechLang] = useState(targetLang === 'en' ? 'en' : 'pl');
-  const [flowSettings, setFlowSettings] = useState({ mel_steps_first: 8, mel_steps_second: 3, mel_twopass_t_noise: 0.12 });
+  const [flowSettings, setFlowSettings] = useState({ mel_steps_first: 10, mel_steps_second: 0, mel_twopass_t_noise: 0.12 });
   const [baseSpeed, setBaseSpeed] = useState(1.0);
   const [maxSpeed, setMaxSpeed] = useState(1.3);
   const [originalGain, setOriginalGain] = useState(0.22);

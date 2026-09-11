@@ -79,7 +79,6 @@ sha256sum \
   models/translate/wegorz_translator_32k_best.pt \
   models/tts/checkpoints/mini_dualpath_learnedvoice.pt \
   models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt \
-  models/tts/checkpoints/styleenc128_lstm.pt \
   models/tts/vocos-mel-24khz/pytorch_model.bin \
   models/tts/voice_banks/selected_top_voices_current.pt \
   > models/MODEL_MANIFEST.sha256

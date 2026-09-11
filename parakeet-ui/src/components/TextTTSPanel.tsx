@@ -13,7 +13,7 @@ export default function TextTTSPanel() {
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
-  const [flowSettings, setFlowSettings] = useState({ mel_steps_first: 8, mel_steps_second: 3, mel_twopass_t_noise: 0.12 });
+  const [flowSettings, setFlowSettings] = useState({ mel_steps_first: 10, mel_steps_second: 0, mel_twopass_t_noise: 0.12 });
   const [text, setText] = useState('');
   const [lang, setLang] = useState('pl');
   const [speed, setSpeed] = useState(1);

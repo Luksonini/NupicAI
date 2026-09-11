@@ -19,7 +19,6 @@ REQUIRED_FILES = {
     "translator Wegorz": ("models/translate/wegorz_translator_32k_best.pt", 1_000_000_000),
     "tokenizer translatora": ("translate/wegorz.model", 500_000),
     "TTS MiniDualPath": ("models/tts/checkpoints/mini_dualpath_learnedvoice.pt", 1_500_000_000),
-    "TTS StyleEnc LSTM": ("models/tts/checkpoints/styleenc128_lstm.pt", 1_500_000_000),
     "TTS TDA-MaskGIT continuity": ("models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt", 1_500_000_000),
     "Vocos config": ("models/tts/vocos-mel-24khz/config.yaml", 100),
     "Vocos weights": ("models/tts/vocos-mel-24khz/pytorch_model.bin", 50_000_000),

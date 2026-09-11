@@ -68,7 +68,7 @@ import soundfile as sf
 # Import model module (gives access to all class/function definitions)
 # ---------------------------------------------------------------------------
 _model_path = Path(
-    os.environ.get("WEGORZ_TTS_MODEL_MODULE", str(_THIS_DIR / "WęgorzTTS3_dubbing_lstm_styleadapters.py"))
+    os.environ.get("WEGORZ_TTS_MODEL_MODULE", str(_THIS_DIR / "wegorz_tts_model.py"))
 ).expanduser()
 if not _model_path.exists():
     raise RuntimeError(f"TTS model module not found: {_model_path}")
@@ -786,8 +786,8 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     ref_mel: str = str(req.get("ref_mel", "")).strip()
     voice_emb: str = str(req.get("voice_emb", "")).strip()
     speed: float = float(req.get("speed", 1.0))
-    mel_steps_first: int = int(req.get("mel_steps_first", int(ckpt_args.get("mel_twopass_steps_first", 8))))
-    mel_steps_second: int = int(req.get("mel_steps_second", int(ckpt_args.get("mel_twopass_steps_second", 3))))
+    mel_steps_first: int = int(req.get("mel_steps_first", 10))
+    mel_steps_second: int = int(req.get("mel_steps_second", 0))
     t_noise: float = float(req.get("mel_twopass_t_noise", float(ckpt_args.get("mel_twopass_t_noise", 0.12))))
     seed: int = int(req.get("seed", 1234))
     out_dir: str = str(req.get("out_dir", tempfile.gettempdir()))
@@ -922,6 +922,8 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
                 for name in value_name:
                     getattr(cache, name, {}).pop(cache_key, None)
 
+    bridge_available = bridge_cache._last_chunk.get(cache_key) == text_chunk_idx - 1
+
     rhythm_state1 = None
     rhythm_available = False
     if bool(ckpt_args.get("duration_rhythm_conditioning", False)) and rhythm_cache is not None:
@@ -989,6 +991,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
         style_vec=style_vec,
         rhythm_state=rhythm_state1,
     )
+    duration_infer_stats = dict(getattr(model.dur, "last_infer_stats", {}) or {})
     _last_hc = getattr(_predict_dur_prior_direct, "_last_hc", None)
     if duration_stateful and _last_hc is not None and all(torch.is_tensor(t) for t in _last_hc):
         _DUR_LSTM_HC_BY_KEY[text_stream_key] = tuple(
@@ -1010,10 +1013,16 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     dur_for_prior1 = torch.where(dur_allowed1, dur_pred1, torch.zeros_like(dur_pred1))
     pause_mask1 = _pause_mask_from_ids(ids_full1)
     sp_mask_tok1 = pause_mask1
-    if rhythm_state1 is not None:
-        rhythm_cache.set_batch(
-            speaker_ids=speaker_ids1, book_ids=book_ids1, chunk_idx=chunk_idx1,
-            durations=dur_for_prior1, token_ids=ids_full1,
+    # A one-frame content token is only ~10.7 ms and can disappear acoustically.
+    # Free-text synthesis may request a safer floor because it has no video budget
+    # that would require taking those frames back from another phoneme.
+    content_mask1 = dur_allowed1 & (~pause_mask1)
+    _content_min = int(req.get("content_min_frames", 1))
+    if _content_min > 1:
+        dur_for_prior1 = torch.where(
+            content_mask1,
+            dur_for_prior1.clamp_min(float(_content_min)),
+            dur_for_prior1,
         )
 
     # Give the vocoder a short acoustic pre-roll before the first content token.
@@ -1022,10 +1031,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     _leading_sp_min = int(req.get("leading_sp_min_frames", 4))
     if _leading_sp_min > 0:
         for b in range(int(dur_for_prior1.size(0))):
-            content_pos = torch.nonzero(
-                dur_allowed1[b] & (~pause_mask1[b]),
-                as_tuple=False,
-            ).flatten()
+            content_pos = torch.nonzero(content_mask1[b], as_tuple=False).flatten()
             if int(content_pos.numel()) <= 0:
                 continue
             first_content = int(content_pos[0].item())
@@ -1050,16 +1056,34 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
             dur_for_prior1,
         )
 
-    # Further tighten trailing pauses (after last content token) — already covered by
-    # pause_max above, but 10 frames keeps pure end-of-chunk silence from feeling long.
+    # Keep a short post-roll after the last content token. Like the leading pre-roll,
+    # it prevents a final consonant from landing directly on the Vocos boundary.
+    _trail_min = int(req.get("trailing_sp_min_frames", 1))
     _trail_max = int(req.get("trailing_sp_max_frames", 10))
-    if _trail_max > 0:
-        not_pause = (~pause_mask1[0]).nonzero(as_tuple=False)
-        if len(not_pause) > 0:
-            last_content = int(not_pause[-1].item())
-            dur_for_prior1[0, last_content + 1:] = (
-                dur_for_prior1[0, last_content + 1:].clamp_max(float(_trail_max))
+    for b in range(int(dur_for_prior1.size(0))):
+        content_pos = torch.nonzero(content_mask1[b], as_tuple=False).flatten()
+        if int(content_pos.numel()) <= 0:
+            continue
+        last_content = int(content_pos[-1].item())
+        trailing_pause = pause_mask1[b] & dur_allowed1[b]
+        trailing_pause[:last_content + 1] = False
+        if _trail_min > 0:
+            dur_for_prior1[b] = torch.where(
+                trailing_pause,
+                dur_for_prior1[b].clamp_min(float(_trail_min)),
+                dur_for_prior1[b],
             )
+        if _trail_max > 0:
+            dur_for_prior1[b] = torch.where(
+                trailing_pause,
+                dur_for_prior1[b].clamp_max(float(_trail_max)),
+                dur_for_prior1[b],
+            )
+    if rhythm_state1 is not None:
+        rhythm_cache.set_batch(
+            speaker_ids=speaker_ids1, book_ids=book_ids1, chunk_idx=chunk_idx1,
+            durations=dur_for_prior1, token_ids=ids_full1,
+        )
     dur_debug = []
     ids_cpu = ids_full1[0].detach().cpu().tolist()
     dur_cpu = dur_for_prior1[0].detach().cpu().tolist()
@@ -1187,10 +1211,15 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
             "prefix_sec": round(float(prefix_k) * float(_SECS_PER_FRAME), 4),
             "speed": float(speed),
             "leading_sp_min_frames": int(_leading_sp_min),
+            "content_min_frames": int(_content_min),
+            "trailing_sp_min_frames": int(_trail_min),
             "emotion_group": emotion_group,
             "emotion_strength": emotion_strength,
             "emotion_enabled": emotion_enabled,
             "duration_stateful": duration_stateful,
+            "duration_infer_stats": duration_infer_stats,
+            "text_chunk_index": int(text_chunk_idx),
+            "bridge_memory_available": bool(bridge_available),
             "rhythm_memory_available": rhythm_available,
             "acoustic_memory_available": acoustic_available,
             "learned_voice": learned_voice_enabled,

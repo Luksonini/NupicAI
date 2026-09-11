@@ -4,6 +4,11 @@ Ta procedura aktualizuje aplikacje bez ponownej instalacji Fedory, ROCm, Dockera
 sterownikow ani srodowiska. Nowa wersja nie dodaje zaleznosci Python wymagajacych
 przebudowy calego hosta, ale obraz aplikacji powinien zostac przebudowany.
 
+`git pull` aktualizuje wspolny kod i frontend. Pliki specyficzne dla hosta sa
+ignorowane przez Git: `.env`, `runtime/`, `models/`, `compose.override.yml` oraz
+`deploy/local/`. W tych miejscach nalezy trzymac konfiguracje ROCm, urzadzenia,
+sekrety, baze i binaria instalatorow. Nie dodawac ich przez `git add -f`.
+
 ## Pliki transportowe
 
 Na serwer trzeba dostarczyc:
@@ -102,7 +107,8 @@ Nie wykonywac `docker compose down -v`, poniewaz `-v` moze usunac wolumeny z
 danymi. Jezeli Compose ma inna nazwe uslugi, zastap `nupicai` jej nazwa.
 
 Po starcie zaloguj sie jako administrator. Ustaw profil
-`TDA-MaskGIT continuity` oraz poczatkowo `first=8`, `second=3`, `t_noise=0.12`.
+`TDA-MaskGIT continuity` oraz `first=10`, `second=0`. Parametr `t_noise` jest
+nieaktywny przy wylaczonym drugim przejsciu.
 
 ## 5. Szybki rollback
 
@@ -116,7 +122,7 @@ docker compose up -d nupicai
 ```
 
 Sam model mozna wycofac bez przebudowy: w panelu administratora wybierz
-`StyleEnc128 LSTM` albo `MiniDualPath learned voice`.
+`MiniDualPath learned voice`.
 
 Przy problemie z baza zatrzymaj aplikacje i odtworz najnowszy plik SQLite z
 `/srv/nupicai-backups`. Nie kopiuj bazy podczas aktywnych zapisow zwyklym `cp`;

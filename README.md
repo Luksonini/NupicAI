@@ -18,6 +18,26 @@ ustawienia pod zebatka oraz tryby mikrofonu i dzwieku systemowego. Nie wymaga Py
 wysyla 16 kHz WAV do tego backendu i korzysta z konta NupicAI. Token sesji trafia
 do systemowego magazynu poswiadczen, a haslo nie jest zapisywane.
 
+### Status instalatorow Flow
+
+Repozytorium zawiera kompletny kod klienta oraz pipeline budowania, ale celowo nie
+przechowuje gotowych binariow. Przed pierwsza publikacja trzeba zbudowac:
+
+```text
+nupicai-flow-linux-x86_64.AppImage
+nupicai-flow-linux-amd64.deb
+nupicai-flow-windows-x86_64.exe
+```
+
+Build wymaga publicznego adresu HTTPS backendu NupicAI. Linux mozna zbudowac
+lokalnie przez `nupic-flow-tauri/build-linux.sh`, a Linux i Windows rownoczesnie
+przez workflow [`.github/workflows/desktop-installers.yml`](.github/workflows/desktop-installers.yml).
+Szczegoly sa w [`nupic-flow-tauri/README.md`](nupic-flow-tauri/README.md).
+
+Strona aktywuje przyciski pobierania po umieszczeniu artefaktow na serwerze w
+ignorowanym katalogu `runtime/downloads/`. Binaria i adres produkcyjny nie powinny
+byc zatwierdzane w Git przed ustaleniem docelowej domeny.
+
 ## Logo i identyfikacja
 
 Glowne logo umiesc jako:
@@ -58,7 +78,6 @@ dubbing/
       wegorz_translator_32k_best.pt
     tts/
       checkpoints/
-        styleenc128_lstm.pt
         mini_dualpath_learnedvoice.pt
         minidualpath_bins_maskgit_continuity_ep742.pt
       vocos-mel-24khz/
@@ -83,6 +102,26 @@ dubbing/
 ```
 
 Najwazniejsza zasada: runtime nie powinien importowac modeli ani modulow dubbingu z zewnetrznych folderow projektu. Modele potrzebne do dubbingu sa w `models/`, a kod TTS i tlumacza jest w `tts/` oraz `translate/`.
+
+## Co synchronizuje Git
+
+GitHub jest zrodlem wspolnego kodu aplikacji, frontendu, klienta Flow, testow,
+workflow CI i dokumentacji. Aktualizacja kodu nie powinna zmieniac konfiguracji
+sprzetowej ani stanu dzialajacego serwera. Lokalne pozostaja:
+
+```text
+.env                         # sekrety i adresy produkcyjne
+runtime/                     # konta, zadania, pliki i instalatory do pobrania
+models/**/*.pt, *.nemo       # duze modele dostarczane osobno
+compose.override.yml         # ustawienia konkretnego hosta/GPU
+deploy/local/                # lokalne pliki ROCm i operacyjne
+```
+
+Wspolpracownik moze rozwijac platnosci i pozostaly kod przez zwykle branche i pull
+requesty. Jego ustawienia Fedora/ROCm, wolumeny, baza, modele i sekrety nie trafiaja
+do repozytorium i nie sa nadpisywane przez `git pull`. Procedura bezpiecznej
+aktualizacji istniejącego serwera znajduje sie w
+[`deploy/UPDATE_EXISTING_SERVER.md`](deploy/UPDATE_EXISTING_SERVER.md).
 
 ## Wymagania
 
@@ -289,7 +328,6 @@ ASR jest ladowany lokalnie przez `EncDecRNNTBPEModel.restore_from(...)`. To ozna
 Strona zawiera dwa kompletne profile zarzadzane przez backend:
 
 ```text
-models/tts/checkpoints/styleenc128_lstm.pt
 models/tts/checkpoints/mini_dualpath_learnedvoice.pt
 models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt
 ```
@@ -332,7 +370,6 @@ Minimalny zestaw do przeniesienia:
 
 ```text
 tts/
-models/tts/checkpoints/styleenc128_lstm.pt
 models/tts/checkpoints/mini_dualpath_learnedvoice.pt
 models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt
 models/tts/vocos-mel-24khz/
@@ -343,7 +380,7 @@ Najprostsza integracja to uruchomienie:
 
 ```bash
 python tts/tts_daemon.py \
-  --resume models/tts/checkpoints/styleenc128_lstm.pt \
+  --resume models/tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt \
   --dataset-json tts/manifest_runtime_refs.json \
   --vocab tts/vocab_pl_orth_en_ipa_bridge.json \
   --device cuda
@@ -393,29 +430,6 @@ Najwazniejsze funkcje integracyjne w `server.py`:
 - `_daemon_call()`
 - `_daemon_synth_chunked_response()`
 - `_speaker_condition_payload()`
-
-## Budowanie nowej bazy glosow
-
-W folderze TTS jest skrypt:
-
-```text
-tts/build_voice_database.py
-```
-
-Przyklad:
-
-```bash
-cd /sciezka/do/dubbing
-
-python tts/build_voice_database.py \
-  --checkpoint models/tts/checkpoints/styleenc128_lstm.pt \
-  --dataset-json /path/to/manifest.json \
-  --out models/tts/voice_banks/selected_top_voices.pt \
-  --device cuda \
-  --max-mels-per-speaker 8
-```
-
-Manifest musi zawierac sciezki do mel/audio w formacie obslugiwanym przez obecny loader danych. Skrypt bierze kilka probek danego speakera, przepuszcza je przez `speaker_encoder` z checkpointu i usrednia wektor glosu.
 
 ## Lokalnosc i hermetycznosc
 

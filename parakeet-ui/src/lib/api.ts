@@ -149,7 +149,7 @@ export async function listSpeakers(): Promise<Speaker[]> {
 
 export async function listTTSModels(): Promise<{ default: string; active: string; models: TTSModelProfile[]; flow_defaults: TTSFlowDefaults }> {
   const res = await fetch(`${BASE}/tts_models`);
-  if (!res.ok) return { default: '', active: '', models: [], flow_defaults: { mel_steps_first: 8, mel_steps_second: 3, mel_twopass_t_noise: 0.12 } };
+  if (!res.ok) return { default: '', active: '', models: [], flow_defaults: { mel_steps_first: 10, mel_steps_second: 0, mel_twopass_t_noise: 0.12 } };
   const data = await res.json();
   return {
     default: String(data.default ?? ''),
