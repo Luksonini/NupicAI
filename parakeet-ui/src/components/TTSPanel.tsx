@@ -523,7 +523,8 @@ function SyncedVideo({ videoSrc, audioSrc, original, videoRef, audioRef }: {
   return <div className="synced-player">
     <video ref={videoRef} controls src={videoSrc} muted={!original}
       onPlay={e => { if (!original && audioRef.current) { audioRef.current.currentTime = e.currentTarget.currentTime; void audioRef.current.play(); } }}
-      onPause={() => audioRef.current?.pause()}
+      onPause={e => { if (!e.currentTarget.ended) audioRef.current?.pause(); }}
+      onEnded={() => { if (!original && audioRef.current && audioRef.current.currentTime < audioRef.current.duration - 0.05) void audioRef.current.play(); }}
       onSeeked={e => { if (audioRef.current) audioRef.current.currentTime = e.currentTarget.currentTime; }}
       onTimeUpdate={e => { if (!original && audioRef.current && Math.abs(audioRef.current.currentTime - e.currentTarget.currentTime) > 0.15) audioRef.current.currentTime = e.currentTarget.currentTime; }} />
     {!original && <audio ref={audioRef} src={audioSrc} />}

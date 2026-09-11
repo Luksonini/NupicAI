@@ -267,6 +267,13 @@ class PipelineIntegrityTests(unittest.TestCase):
         self.assertAlmostEqual(start, 12.5)
         self.assertAlmostEqual(duration, 10.0)
 
+    def test_mixed_video_does_not_cut_audio_to_source_video_length(self) -> None:
+        source = Path(server.__file__).read_text(encoding="utf-8")
+        mix_video_body = source.split("async def mix_video(", 1)[1].split(
+            '@app.get("/jobs/{job_id}/stream")', 1
+        )[0]
+        self.assertNotIn('"-shortest"', mix_video_body)
+
     def test_dub_rerender_reserves_only_changed_segment_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "segment.wav"

@@ -3164,7 +3164,6 @@ async def mix_video(
         "-i", str(dubbed_wav),
         "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
         str(out_mp4),
     ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return StreamingResponse(
