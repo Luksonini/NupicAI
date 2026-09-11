@@ -3,7 +3,7 @@
 Zasady wspolnej pracy, branchy i oddzielenia konfiguracji serwera opisuje
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Aktualizacja juz dzialajacego serwera bez
 ponownej instalacji ROCm jest opisana w
-[`deploy/UPDATE_EXISTING_SERVER.md`](deploy/UPDATE_EXISTING_SERVER.md).
+[`deploy/MIGRATE_EXISTING_ROCM_SERVER.md`](deploy/MIGRATE_EXISTING_ROCM_SERVER.md).
 
 Hermetyczny folder aplikacji do transkrypcji, tlumaczenia, dubbingu i syntezy glosu z lokalnym ASR Parakeet, lokalnym TTS Wegorz, lokalnym vocoderem Vocos, lokalnym bankiem glosow oraz lokalnym modelem tlumaczenia Wegorz.
 
@@ -120,8 +120,8 @@ deploy/local/                # lokalne pliki ROCm i operacyjne
 Wspolpracownik moze rozwijac platnosci i pozostaly kod przez zwykle branche i pull
 requesty. Jego ustawienia Fedora/ROCm, wolumeny, baza, modele i sekrety nie trafiaja
 do repozytorium i nie sa nadpisywane przez `git pull`. Procedura bezpiecznej
-aktualizacji istniejącego serwera znajduje sie w
-[`deploy/UPDATE_EXISTING_SERVER.md`](deploy/UPDATE_EXISTING_SERVER.md).
+aktualizacji istniejacego serwera znajduje sie w
+[`deploy/MIGRATE_EXISTING_ROCM_SERVER.md`](deploy/MIGRATE_EXISTING_ROCM_SERVER.md).
 
 ## Wymagania
 

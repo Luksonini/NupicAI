@@ -6,7 +6,6 @@ Powiazane instrukcje:
   serwera brata do repozytorium GitHub bez ponownej konfiguracji ROCm;
 - `AGENT_UPDATE_EXISTING_ROCM_SERVER.md` - bezpieczny runbook dla agenta;
 - `MODEL_DISTRIBUTION.md` - przekazywanie checkpointow poza Git;
-- `UPDATE_EXISTING_SERVER.md` - starsza procedura aktualizacji przez bundle;
 - `ROCM10_FEDORA43_STRIX_HALO.md` - pelny plan zgodnosci Fedora/ROCm.
 
 Ten wariant zaklada jeden proces aplikacji, jedna karte GPU i SQLite. Nie uruchamiaj
