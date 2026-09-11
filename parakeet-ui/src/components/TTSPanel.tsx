@@ -133,7 +133,6 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
   const [speakerLoadError, setSpeakerLoadError] = useState('');
   const [speaker, setSpeaker] = useState('');
   const [ttsModel, setTtsModel] = useState('');
-  const [referenceFromSource, setReferenceFromSource] = useState(false);
   const [speechLang, setSpeechLang] = useState(targetLang === 'en' ? 'en' : 'pl');
   const [flowSettings, setFlowSettings] = useState({ mel_steps_first: 10, mel_steps_second: 0, mel_twopass_t_noise: 0.12 });
   const [baseSpeed, setBaseSpeed] = useState(1.0);
@@ -252,18 +251,13 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
     });
   }, []);
 
-  useEffect(() => {
-    if (ttsModel !== 'shared_reference_experimental') setReferenceFromSource(false);
-  }, [ttsModel]);
-
   const run = async (segmentsOverride?: Segment[]) => {
     const renderSegments = segmentsOverride ?? editableSegments;
     setRunning(true); setError(''); setQuotaExceeded(false); setProgress(0); setMessage(locale === 'pl' ? 'Przygotowuję rendering…' : 'Preparing render…');
     try {
       const jobId = await submitDub({
         segments: renderSegments, speaker_label: speaker, tts_model_profile: ttsModel,
-        transcribe_job_id: transcribeJobId, reference_from_source: referenceFromSource,
-        reuse_dub_job_id: dubJobId, target_lang: speechLang,
+        transcribe_job_id: transcribeJobId, reuse_dub_job_id: dubJobId, target_lang: speechLang,
         base_speed: baseSpeed, max_adaptive_speed: maxSpeed, extra_tail_sec: 0,
         dur_scale: 1, ...flowSettings,
         digital_silence: true, pause_edge_frames: 10, short_continuity_ms: 0,
@@ -447,7 +441,7 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
                     onSelect={event => { cursorPositionRefs.current[segmentId] = event.currentTarget.selectionStart; }}
                     onChange={e => { setEditableSegments(prev => prev.map((item, idx) => idx === i ? { ...item, translation: e.target.value } : item)); setSplitDraft(null); setEditorNotice(''); setResult(null); }} />
                   <div className="segment-tools">
-                    <label title={locale === 'pl' ? 'Głos tylko dla tego fragmentu' : 'Voice for this segment only'}><UserRound size={14} /><select value={seg.speaker_label ?? ''} disabled={referenceFromSource || speakersLoading || !!speakerLoadError} onChange={e => commitSegments(editableSegments.map((item, idx) => idx === i ? { ...item, speaker_label: e.target.value || undefined } : item))}><option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : `${locale === 'pl' ? 'Głos główny' : 'Main voice'}${speaker ? `: ${speakers.find(item => item.label === speaker)?.display_name ?? speaker}` : ''}`}</option>{speakers.map(item => <option key={item.label} value={item.label}>{item.display_name ?? item.label}</option>)}</select></label>
+                    <label title={locale === 'pl' ? 'Głos tylko dla tego fragmentu' : 'Voice for this segment only'}><UserRound size={14} /><select value={seg.speaker_label ?? ''} disabled={speakersLoading || !!speakerLoadError} onChange={e => commitSegments(editableSegments.map((item, idx) => idx === i ? { ...item, speaker_label: e.target.value || undefined } : item))}><option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : `${locale === 'pl' ? 'Głos główny' : 'Main voice'}${speaker ? `: ${speakers.find(item => item.label === speaker)?.display_name ?? speaker}` : ''}`}</option>{speakers.map(item => <option key={item.label} value={item.label}>{item.display_name ?? item.label}</option>)}</select></label>
                     <button className={`button button-ghost button-small segment-action${activeSplit ? ' active' : ''}`} onClick={() => openSplitEditor(i)}><Scissors size={14} />{locale === 'pl' ? 'Podziel' : 'Split'}</button>
                     {i < editableSegments.length - 1 && <button className="button button-ghost button-small segment-action" onClick={() => mergeWithNext(i)}><Link2 size={14} />{locale === 'pl' ? 'Połącz z następnym' : 'Merge next'}</button>}
                     {result && <button className="icon-button" disabled={running} title={locale === 'pl' ? 'Wygeneruj ponownie tylko ten fragment' : 'Regenerate only this segment'} onClick={() => regenerateSegment(i)}><RefreshCw size={15} /></button>}
@@ -469,14 +463,10 @@ export default function TTSPanel({ segments, targetLang, transcribeJobId, origin
         <div className="inspector-scroll">
           <section className="inspector-section">
             <div className="inspector-title"><Mic2 size={17} /><h3>{locale === 'pl' ? 'Głos' : 'Voice'}</h3></div>
-            <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)} disabled={referenceFromSource || speakersLoading || !!speakerLoadError}>
+            <label><span className="field-label">{t('speaker')}</span><select value={speaker} onChange={e => setSpeaker(e.target.value)} disabled={speakersLoading || !!speakerLoadError}>
               {!speakers.length && <option value="">{speakersLoading ? (locale === 'pl' ? 'Ładowanie głosów…' : 'Loading voices…') : (locale === 'pl' ? 'Brak głosów' : 'No voices')}</option>}
               {speakers.map(item => <option key={`${item.id}-${item.label}`} value={item.label}>{item.display_name ?? item.label}</option>)}
             </select></label>
-            {ttsModel === 'shared_reference_experimental' && <label className="source-voice-toggle">
-              <input type="checkbox" checked={referenceFromSource} onChange={e => { setReferenceFromSource(e.target.checked); setResult(null); }} />
-              <span><b>{locale === 'pl' ? 'Naśladuj głos z filmu' : 'Imitate the source voice'}</b><small>{locale === 'pl' ? 'Referencja osobno dla każdego segmentu' : 'A separate reference for each segment'}</small></span>
-            </label>}
             {speakersLoading && <p className="speaker-loading"><Loader2 className="spin" size={14} />{locale === 'pl' ? 'Ładowanie listy głosów…' : 'Loading voice list…'}</p>}
             {speakerLoadError && <div className="speaker-load-error"><AlertTriangle size={15} /><span>{speakerLoadError}</span><button className="button button-secondary button-small" onClick={() => void loadSpeakerOptions()}><RefreshCw size={14} />{locale === 'pl' ? 'Ponów' : 'Retry'}</button></div>}
             <label><span className="field-label">{locale === 'pl' ? 'Język dubbingu' : 'Dubbing language'}</span>

@@ -129,11 +129,6 @@ if TTS_CKPT is None or not Path(TTS_CKPT).exists():
     )
 
 _MASKGIT_CONTINUITY_CKPT = MODELS_LOCAL / "tts/checkpoints/minidualpath_bins_maskgit_continuity_ep742.pt"
-_SHARED_REFERENCE_CKPT = (
-    Path(os.environ["WEGORZ_SHARED_REFERENCE_CKPT"]).expanduser()
-    if str(os.environ.get("WEGORZ_SHARED_REFERENCE_CKPT", "")).strip()
-    else None
-)
 _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
     "mini_dualpath": {
         "label": "MiniDualPath learned voice",
@@ -146,12 +141,6 @@ _TTS_MODEL_PROFILES_RAW: dict[str, dict[str, Any]] = {
         "checkpoint": _MASKGIT_CONTINUITY_CKPT,
     },
 }
-if _SHARED_REFERENCE_CKPT is not None:
-    _TTS_MODEL_PROFILES_RAW["shared_reference_experimental"] = {
-        "label": "Shared reference zero-shot (experimental)",
-        "description": "shared reference encoder: voice + style + 16 local prosody tokens",
-        "checkpoint": _SHARED_REFERENCE_CKPT,
-    }
 TTS_MODEL_PROFILES: dict[str, dict[str, Any]] = {
     key: rec for key, rec in _TTS_MODEL_PROFILES_RAW.items()
     if Path(rec["checkpoint"]).exists()
@@ -370,11 +359,6 @@ def _tts_continuity_enabled(profile: str | None) -> bool:
     return str(profile or "").strip() == "maskgit_continuity"
 
 
-def _tts_content_min_frames(profile: str | None) -> int:
-    key = str(profile or "").strip()
-    return 2 if key in {"maskgit_continuity", "shared_reference_experimental"} else 1
-
-
 def _stop_daemon_locked() -> None:
     global _daemon_active_profile
     procs = list(_daemon_procs.items())
@@ -499,14 +483,7 @@ def _daemon_state_restore(snapshot_id: str, profile: str | None = None) -> None:
     _daemon_call({"op": "state_restore", "snapshot_id": str(snapshot_id), "tts_model_profile": profile})
 
 
-def _daemon_encode_ref_mel(
-    audio_path: Path,
-    out_dir: Path,
-    *,
-    start_sec: float = 0.0,
-    max_sec: float = 12.0,
-    profile: str | None = None,
-) -> dict[str, Any]:
+def _daemon_encode_ref_mel(audio_path: Path, out_dir: Path, *, start_sec: float = 0.0, max_sec: float = 12.0) -> dict[str, Any]:
     return _daemon_call({
         "op": "encode_ref_mel",
         "audio": str(audio_path),
@@ -514,7 +491,6 @@ def _daemon_encode_ref_mel(
         "tag": f"voice_prompt_{uuid.uuid4().hex[:10]}",
         "start_sec": float(start_sec),
         "max_sec": float(max_sec),
-        "tts_model_profile": profile,
     })
 
 
@@ -854,30 +830,6 @@ def _convert_media_to_mono24k(src: Path, out_dir: Path) -> Path:
     dst = out_dir / f"voice_prompt_{uuid.uuid4().hex[:12]}_mono24k.wav"
     subprocess.run(
         ["ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "24000", "-sample_fmt", "s16", str(dst)],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    return dst
-
-
-def _extract_media_window_to_mono24k(
-    src: Path,
-    out_dir: Path,
-    *,
-    start_sec: float,
-    duration_sec: float,
-    tag: str,
-) -> Path:
-    core.require_executable("ffmpeg")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    dst = out_dir / f"{tag}_source_reference.wav"
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-ss", f"{max(0.0, start_sec):.3f}",
-            "-i", str(src), "-t", f"{max(0.25, duration_sec):.3f}",
-            "-vn", "-ac", "1", "-ar", "24000", "-sample_fmt", "s16", str(dst),
-        ],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -1793,7 +1745,6 @@ class DubRequest(BaseModel):
     speaker_label: str
     tts_model_profile: str = DEFAULT_TTS_PROFILE
     transcribe_job_id: str = ""
-    reference_from_source: bool = False
     reuse_dub_job_id: str = ""
     target_lang: str = "pl"
     base_speed: float = 1.0
@@ -1825,8 +1776,6 @@ def _dub_segment_render_key(
         "text": str(seg.get("translation") or seg.get("text", "")).strip(),
         "speaker": str(seg.get("speaker_label") or req.speaker_label),
         "model": req.tts_model_profile,
-        "reference_from_source": bool(req.reference_from_source),
-        "reference_source_job": req.transcribe_job_id if req.reference_from_source else "",
         "lang": req.target_lang,
         "base_speed": round(float(req.base_speed), 5),
         "max_speed": round(float(req.max_adaptive_speed), 5),
@@ -1842,27 +1791,6 @@ def _dub_segment_render_key(
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
-
-
-def _source_reference_window(
-    source_start: float,
-    source_end: float,
-    source_duration: float,
-    *,
-    min_seconds: float = 3.0,
-    max_seconds: float = 10.0,
-) -> tuple[float, float]:
-    """Return a local source window without unnecessarily mixing distant speakers."""
-    total = max(0.0, float(source_duration))
-    start = max(0.0, float(source_start))
-    end = max(start + 0.25, float(source_end))
-    wanted = min(max_seconds, max(min_seconds, end - start + 0.5))
-    center = (start + end) * 0.5
-    window_start = max(0.0, center - wanted * 0.5)
-    if total > 0.0:
-        window_start = min(window_start, max(0.0, total - wanted))
-        wanted = min(wanted, max(0.25, total - window_start))
-    return window_start, wanted
 
 
 def _estimate_dub_generation_seconds(req: DubRequest, timeline_seconds: float) -> float:
@@ -1967,18 +1895,6 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
 
         out_dir = _job_work_dir(job) / "dub"
         out_dir.mkdir(parents=True, exist_ok=True)
-        source_path: Path | None = None
-        source_duration = 0.0
-        if req.reference_from_source:
-            source_job = _jobs.get(req.transcribe_job_id)
-            source_path_value = (
-                (source_job.result or {}).get("upload_path")
-                if source_job and source_job.result else ""
-            )
-            source_path = Path(str(source_path_value)) if source_path_value else None
-            if source_path is None or not source_path.exists():
-                raise RuntimeError("Brak oryginalnego pliku do pobrania referencji głosu")
-            source_duration = _ffprobe_dur(source_path)
 
         for i, seg in enumerate(segs):
             text = str(seg.get("translation") or seg.get("text", "")).strip()
@@ -1992,37 +1908,6 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
             segment_id = str(seg.get("segment_id") or f"segment-{i}")
             segment_speaker = str(seg.get("speaker_label") or req.speaker_label)
             speaker_payload = _speaker_condition_payload(segment_speaker)
-            source_reference_meta: dict[str, Any] = {}
-
-            def ensure_source_reference() -> None:
-                nonlocal speaker_payload, source_reference_meta
-                if not req.reference_from_source or source_reference_meta:
-                    return
-                if source_path is None:
-                    raise RuntimeError("Brak oryginalnego pliku referencji")
-                ref_start, ref_duration = _source_reference_window(src_start, src_end, source_duration)
-                ref_wav = _extract_media_window_to_mono24k(
-                    source_path,
-                    out_dir,
-                    start_sec=ref_start,
-                    duration_sec=ref_duration,
-                    tag=f"seg_{i:04d}",
-                )
-                encoded_ref = _daemon_encode_ref_mel(
-                    ref_wav,
-                    out_dir,
-                    max_sec=ref_duration,
-                    profile=req.tts_model_profile,
-                )
-                ref_mel = str(encoded_ref.get("mel", ""))
-                if not ref_mel or not Path(ref_mel).exists():
-                    raise RuntimeError(f"Nie udało się zakodować referencji segmentu {i + 1}")
-                speaker_payload = {"ref_mel": ref_mel, "use_shared_reference": True}
-                source_reference_meta = {
-                    "enabled": True,
-                    "start": round(ref_start, 3),
-                    "duration": round(ref_duration, 3),
-                }
             render_key = _dub_segment_render_key(seg, req, target_budget=target_budget, position=i)
             continuity_enabled = _tts_continuity_enabled(req.tts_model_profile)
             continuity_key = (
@@ -2039,7 +1924,6 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
             })
 
             def synth_at(speed: float, tag_suffix: str = "") -> str:
-                ensure_source_reference()
                 tag = f"seg_{job.id[:8]}_{i:04d}{tag_suffix}"
                 base = {
                     "text": text,
@@ -2055,7 +1939,6 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
                     "digital_silence": req.digital_silence,
                     "pause_edge_frames": req.pause_edge_frames,
                     "leading_sp_min_frames": 4,
-                    "content_min_frames": _tts_content_min_frames(req.tts_model_profile),
                     "short_continuity_ms": req.short_continuity_ms,
                     "emotion_group": req.emotion_group,
                     "emotion_strength": req.emotion_strength,
@@ -2152,7 +2035,6 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
                 "over_budget": round(max(0.0, (place + audio_sec) - next_start), 3),
                 "tts_debug_summary": debug_summary,
                 "tts_debug": debug_info,
-                "source_reference": source_reference_meta,
             })
 
         out_wav = out_dir / "dubbed.wav"
@@ -2180,7 +2062,6 @@ def _worker_dub(job: Job, req: DubRequest) -> None:
             "mixed_audio_path": str(mixed_wav) if mixed_wav is not None else "",
             "duration": round(last_end, 3),
             "transcribe_job_id": req.transcribe_job_id,
-            "reference_from_source": bool(req.reference_from_source),
             "segments": meta_segments,
             "reused_segments": reused_segments,
             "generated_segments": n - reused_segments,
@@ -2935,7 +2816,7 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
                 # In free-text synthesis there is no external timing budget.
                 # One 10.7 ms frame is not enough for a reliable content phoneme,
                 # especially with categorical MaskGIT durations.
-                "content_min_frames": _tts_content_min_frames(req.tts_model_profile),
+                "content_min_frames": 2 if _tts_continuity_enabled(req.tts_model_profile) else 1,
                 "trailing_sp_min_frames": 4,
                 "short_continuity_ms": req.short_continuity_ms,
                 "emotion_group": req.emotion_group,
@@ -3051,14 +2932,6 @@ async def dub(
     _enforce_rate_limit(request, "dub", limit=60, window=3600)
     if not req.segments or len(req.segments) > 5000:
         raise HTTPException(status_code=400, detail="Nieprawidłowa liczba segmentów dubbingu")
-    if req.reference_from_source:
-        if req.tts_model_profile != "shared_reference_experimental":
-            raise HTTPException(
-                status_code=400,
-                detail="Naśladowanie głosu z filmu wymaga eksperymentalnego modelu shared reference",
-            )
-        if not req.transcribe_job_id:
-            raise HTTPException(status_code=400, detail="Brak źródłowego zadania transkrypcji")
     if req.transcribe_job_id:
         _require_job(req.transcribe_job_id, user)
     if req.reuse_dub_job_id:

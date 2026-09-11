@@ -45,7 +45,6 @@ export interface DubResult {
   mixed_audio_path?: string;
   duration: number;
   transcribe_job_id: string;
-  reference_from_source?: boolean;
   segments?: Array<Record<string, unknown>>;
   debug_log?: string;
   reused_segments?: number;
@@ -135,7 +134,6 @@ export interface DubParams {
   speaker_label: string;
   tts_model_profile: string;
   transcribe_job_id: string;
-  reference_from_source?: boolean;
   reuse_dub_job_id?: string;
   target_lang: string;
   base_speed: number;

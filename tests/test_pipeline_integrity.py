@@ -63,7 +63,7 @@ class PipelineIntegrityTests(unittest.TestCase):
         profile, checkpoint = server._resolve_tts_profile("maskgit_continuity")
         self.assertEqual(profile, "maskgit_continuity")
         self.assertTrue(checkpoint.is_file())
-        self.assertIn(server.DEFAULT_TTS_PROFILE, server.TTS_MODEL_PROFILES)
+        self.assertEqual(server.DEFAULT_TTS_PROFILE, "maskgit_continuity")
         self.assertNotIn("styleenc128_lstm", server.TTS_MODEL_PROFILES)
         self.assertTrue(server._tts_continuity_enabled(profile))
         self.assertFalse(server._tts_continuity_enabled("mini_dualpath"))
@@ -250,22 +250,6 @@ class PipelineIntegrityTests(unittest.TestCase):
         self.assertEqual(base, same)
         self.assertNotEqual(base, changed_nonce)
         self.assertNotEqual(base, changed_voice)
-        req.reference_from_source = True
-        self.assertNotEqual(
-            base,
-            server._dub_segment_render_key(segment, req, target_budget=2.0, position=0),
-        )
-
-    def test_source_reference_window_stays_local_and_within_media(self) -> None:
-        start, duration = server._source_reference_window(10.0, 11.0, 60.0)
-        self.assertAlmostEqual(start, 9.0)
-        self.assertAlmostEqual(duration, 3.0)
-        start, duration = server._source_reference_window(0.0, 1.0, 2.0)
-        self.assertEqual(start, 0.0)
-        self.assertEqual(duration, 2.0)
-        start, duration = server._source_reference_window(10.0, 25.0, 30.0)
-        self.assertAlmostEqual(start, 12.5)
-        self.assertAlmostEqual(duration, 10.0)
 
     def test_mixed_video_does_not_cut_audio_to_source_video_length(self) -> None:
         source = Path(server.__file__).read_text(encoding="utf-8")

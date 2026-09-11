@@ -157,23 +157,6 @@ Potem otworz:
 http://127.0.0.1:8765
 ```
 
-## Eksperymentalne nasladowanie glosu z filmu
-
-Checkpoint shared-reference jest celowo profilem opcjonalnym. Aby wykonac test A/B,
-ustaw w `.env`:
-
-```bash
-WEGORZ_SHARED_REFERENCE_CKPT=/sciezka/prior_mu_flow_spkprefix_dualhead_last.pt
-```
-
-Uruchom serwer ponownie, wybierz profil `Shared reference zero-shot
-(experimental)` w panelu administratora, a w widoku dubbingu wlacz `Nasladuj glos
-z filmu`. Kazdy segment dostaje lokalne, 3-10 sekundowe okno oryginalnej sciezki
-jako referencje. Tryb nie zmienia zwyklego MaskGIT ani zapisanych glosow.
-
-Aby calkowicie wycofac eksperyment, usun `WEGORZ_SHARED_REFERENCE_CKPT` z `.env`
-i uruchom serwer ponownie. Profil i przelacznik znikna bez zmiany danych.
-
 Jesli aplikacja ma byc dostepna z innych komputerow w sieci:
 
 ```bash

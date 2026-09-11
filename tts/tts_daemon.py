@@ -64,12 +64,6 @@ import torch.nn.functional as F
 import numpy as np
 import soundfile as sf
 
-from shared_reference import (
-    PromptTextFusion,
-    SharedReferenceEncoder,
-    fuse_prompt_preserving_prefix,
-)
-
 # ---------------------------------------------------------------------------
 # Import model module (gives access to all class/function definitions)
 # ---------------------------------------------------------------------------
@@ -321,34 +315,6 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
             gate_max=float(ckpt_args.get("acoustic_memory_gate_max", 0.05)),
         ).to(device)
 
-    shared_reference_encoder = None
-    prompt_text_fusion = None
-    if isinstance(payload.get("shared_reference_encoder"), dict):
-        if not isinstance(payload.get("prompt_text_fusion"), dict):
-            raise RuntimeError(
-                "Checkpoint contains shared_reference_encoder without prompt_text_fusion."
-            )
-        shared_reference_encoder = SharedReferenceEncoder(
-            n_mels=N_MELS,
-            dim=int(ckpt_args.get("prompt_dim", 256)),
-            token_count=int(ckpt_args.get("prompt_token_count", 16)),
-            layers=int(ckpt_args.get("shared_reference_layers", 4)),
-            heads=4,
-            attn_dim=128,
-            conv_dim=128,
-            speaker_dim=spk_dim,
-            style_dim=128,
-            adapter_dim=int(ckpt_args.get("shared_reference_adapter_dim", 96)),
-            dropout=float(ckpt_args.get("shared_reference_dropout", 0.05)),
-        ).to(device)
-        prompt_text_fusion = PromptTextFusion(
-            text_dim=hidden_dim,
-            prompt_dim=int(ckpt_args.get("prompt_dim", 256)),
-            layers=int(ckpt_args.get("prompt_fusion_layers", 1)),
-            heads=8,
-            dropout=0.1,
-        ).to(device)
-
     # ---- Mel flow ----
     flow_layers = max(1, int(ckpt_args.get("flow_layers", 6)))
     flow_heads = max(1, int(ckpt_args.get("flow_heads", 8)))
@@ -424,16 +390,6 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
     if acoustic_memory is not None:
         acoustic_memory.load_state_dict(payload["acoustic_memory"], strict=True)
         print("[daemon] Loaded previous acoustic memory", file=sys.stderr, flush=True)
-    if shared_reference_encoder is not None and prompt_text_fusion is not None:
-        shared_reference_encoder.load_state_dict(
-            payload["shared_reference_encoder"], strict=True
-        )
-        prompt_text_fusion.load_state_dict(payload["prompt_text_fusion"], strict=True)
-        print(
-            "[daemon] Loaded shared zero-shot reference encoder and prompt fusion",
-            file=sys.stderr,
-            flush=True,
-        )
     if speaker_encoder is not None and "speaker_encoder" in payload and payload.get("speaker_encoder") is not None:
         speaker_encoder.load_state_dict(payload["speaker_encoder"], strict=False)
         print("[daemon] Loaded speaker_encoder from checkpoint", file=sys.stderr, flush=True)
@@ -458,10 +414,6 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
         eval_modules.append(learned_style_table)
     if acoustic_memory is not None:
         eval_modules.append(acoustic_memory)
-    if shared_reference_encoder is not None:
-        eval_modules.append(shared_reference_encoder)
-    if prompt_text_fusion is not None:
-        eval_modules.append(prompt_text_fusion)
     for m in eval_modules:
         m.eval()
         for p in m.parameters():
@@ -496,8 +448,6 @@ def _load_model(resume: str, device: torch.device) -> Dict[str, Any]:
         "dur_predictor": dur_predictor,
         "mel_flow": mel_flow,
         "speaker_encoder": speaker_encoder,
-        "shared_reference_encoder": shared_reference_encoder,
-        "prompt_text_fusion": prompt_text_fusion,
         "learned_voice_enabled": learned_voice_enabled,
         "learned_spk_table": learned_spk_table,
         "learned_style_table": learned_style_table,
@@ -827,8 +777,6 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     mel_flow = components["mel_flow"]
     vocos = components["vocos"]
     speaker_encoder = components["speaker_encoder"]
-    shared_reference_encoder = components.get("shared_reference_encoder")
-    prompt_text_fusion = components.get("prompt_text_fusion")
     learned_voice_enabled = bool(components.get("learned_voice_enabled", False))
     learned_spk_table = components.get("learned_spk_table")
     learned_style_table = components.get("learned_style_table")
@@ -880,33 +828,10 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
         _TEXT_CHUNK_BY_KEY.pop(continuity_key, None)
         _DUR_LSTM_HC_BY_KEY.pop(continuity_key, None)
 
-    # ---- Speaker/reference conditioning ----
+    # ---- Speaker conditioning ----
     spk_dim = int(ckpt_args.get("spk_dim", 256))
     speaker_id_for_model = 0
-    prompt_tokens = None
-    use_shared_reference = bool(
-        shared_reference_encoder is not None
-        and prompt_text_fusion is not None
-        and req.get("use_shared_reference", bool(ref_mel))
-    )
-    if use_shared_reference:
-        if not ref_mel or not Path(ref_mel).exists():
-            raise ValueError(
-                "This zero-shot checkpoint requires ref_mel for shared reference conditioning."
-            )
-        mel_ref_bct, t_ref = _load_ref_mel_pt(ref_mel, device)
-        enc_dev = next(shared_reference_encoder.parameters()).device
-        mask_bt = _make_tmask_from_Tlen(
-            t_ref.to(enc_dev), int(mel_ref_bct.size(-1))
-        ).squeeze(1).to(device=enc_dev, dtype=torch.bool)
-        spk_vec_256, style_vec, prompt_tokens, _ = shared_reference_encoder(
-            mel_ref_bct.to(device=enc_dev, dtype=torch.float32),
-            mask_bt=mask_bt,
-        )
-        spk_vec_256 = F.normalize(spk_vec_256.float(), dim=-1).to(device=device)
-        style_vec = style_vec.float().to(device=device)
-        prompt_tokens = prompt_tokens.float().to(device=device)
-    elif learned_voice_enabled:
+    if learned_voice_enabled:
         if learned_spk_table is None or learned_style_table is None:
             raise RuntimeError("learned_voice checkpoint loaded without learned voice tables.")
         raw_sid = req.get("speaker_id", 0)
@@ -1047,26 +972,6 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     x_tok1, ids_full1, special_len1, _mem_after1 = encode_text_features_stateful(**encode_kwargs)
     _TEXT_CHUNK_BY_KEY[text_stream_key] = text_chunk_idx + 1
 
-    x_tok_prompt1 = x_tok1
-    prompt_fusion_mode = str(ckpt_args.get("prompt_fusion", "off")).lower().strip()
-    if prompt_tokens is not None and prompt_fusion_mode != "off":
-        x_tok_prompt1 = fuse_prompt_preserving_prefix(
-            prompt_text_fusion,
-            x_tok1,
-            prompt_tokens.to(device=x_tok1.device, dtype=x_tok1.dtype),
-            special_len=special_len1,
-        )
-    x_tok_dur1 = (
-        x_tok_prompt1
-        if prompt_fusion_mode in ("duration", "duration_prior")
-        else x_tok1
-    )
-    x_tok_prior1 = (
-        x_tok_prompt1
-        if prompt_fusion_mode in ("prior", "duration_prior")
-        else x_tok1
-    )
-
     # ---- Duration prediction ----
     dur_noise = float(ckpt_args.get("infer_dur_noise_scale", 0.1))
     _dur_lstm_hc = _DUR_LSTM_HC_BY_KEY.get(text_stream_key) if duration_stateful else None
@@ -1074,7 +979,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
         _dur_lstm_hc = tuple(t.to(device=device) for t in _dur_lstm_hc)  # type: ignore[assignment]
     dur_pred1, _, _ = _predict_dur_prior_direct(
         model,
-        x_tok_dur1,
+        x_tok1,
         tok_pad1,
         special_len1,
         source="prior_mu",
@@ -1201,7 +1106,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
     # ---- Prior mu sampling ----
     prior_noise_scale = float(ckpt_args.get("prior_noise_scale", 1.0))
     t0_btc1, _, _, _ = prior_mu(
-        x_tok_prior1,
+        x_tok1,
         dur_for_prior1,
         cond=None,
         T_hint=None,
@@ -1217,7 +1122,7 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
         gauss_align_btl = None
 
     # ---- Mel flow (twopass) ----
-    text_cond = x_tok_prior1 if bool(CONFIG.get("text_cross_attn", True)) else None
+    text_cond = x_tok1 if bool(CONFIG.get("text_cross_attn", True)) else None
     prefix_k = 0
     prefix_tail = None
     prev_mel = _CONTINUITY_MEL_BY_KEY.get(continuity_key) if continuity_key else None
@@ -1319,8 +1224,6 @@ def synthesize_one(req: Dict[str, Any], components: Dict[str, Any]) -> Dict[str,
             "acoustic_memory_available": acoustic_available,
             "learned_voice": learned_voice_enabled,
             "speaker_id": int(speaker_id_for_model),
-            "shared_reference": bool(use_shared_reference),
-            "prompt_fusion": prompt_fusion_mode,
             "durations": dur_debug,
         },
     }
