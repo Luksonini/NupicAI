@@ -448,6 +448,7 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
         mask_schedule: str = "cosine",
         min_token_frames: int = 1,
         min_pause_frames: int = 1,
+        boundary_pause_max_frames: int = 16,
         rhythm_dim: int = 6,
         rhythm_gate_init: float = 0.02,
     ):
@@ -464,6 +465,7 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
         self.mask_schedule = str(mask_schedule).lower().strip()
         self.min_token_frames = max(0, int(min_token_frames))
         self.min_pause_frames = max(0, int(min_pause_frames))
+        self.boundary_pause_max_frames = max(self.min_pause_frames, int(boundary_pause_max_frames))
 
         self.style_proj = nn.Linear(int(style_dim), int(dim)) if int(style_dim) > 0 else None
         self.style_gate = nn.Parameter(torch.tensor(0.01))
@@ -561,6 +563,7 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
         token_ids: Optional[torch.Tensor],
         pending: torch.Tensor,
         remaining_total: int,
+        full_valid: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         indices = torch.nonzero(pending, as_tuple=False).flatten()
         if indices.numel() == 0:
@@ -572,10 +575,98 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
         if token_ids is not None:
             is_pause = token_ids[indices] == int(SYMBOL2ID.get("<sp>", -999999))
             floors = torch.where(is_pause, torch.full_like(floors, self.min_pause_frames), floors)
-        normalized = self._largest_remainder(values[indices], int(remaining_total), floors)
+        allocation_valid = self._duration_allocation_mask(
+            token_ids, pending if full_valid is None else full_valid
+        )[indices]
+        floors = torch.where(allocation_valid, floors, torch.zeros_like(floors))
+        selected = torch.where(allocation_valid, values[indices], torch.zeros_like(values[indices]))
+        normalized = self._largest_remainder(selected, int(remaining_total), floors)
+        boundary = self._boundary_pause_mask(
+            token_ids, pending if full_valid is None else full_valid
+        )[indices]
+        if bool(boundary.any()):
+            capped = normalized[boundary].clamp_max(self.boundary_pause_max_frames)
+            if bool((capped != normalized[boundary]).any()):
+                normalized[boundary] = capped
+                flexible = (~boundary) & allocation_valid
+                if bool(flexible.any()):
+                    fixed = (~boundary) & (~flexible)
+                    flexible_total = int(
+                        remaining_total
+                        - int(capped.sum().item())
+                        - int(normalized[fixed].sum().item())
+                    )
+                    normalized[flexible] = self._largest_remainder(
+                        selected[flexible], flexible_total, floors[flexible]
+                    )
         out = values.new_zeros(values.shape, dtype=torch.long)
         out[indices] = normalized
         return out
+
+    @staticmethod
+    def _boundary_pause_mask(
+        token_ids: Optional[torch.Tensor],
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
+        mask = torch.zeros_like(valid, dtype=torch.bool)
+        if token_ids is None:
+            return mask
+        pause = torch.nonzero(
+            valid & (token_ids == int(SYMBOL2ID.get("<sp>", -999999))),
+            as_tuple=False,
+        ).flatten()
+        if pause.numel() > 0:
+            mask[pause[0]] = True
+            mask[pause[-1]] = True
+        return mask
+
+    @staticmethod
+    def _duration_allocation_mask(
+        token_ids: Optional[torch.Tensor],
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
+        allowed_ids = globals().get("_DUR_ALLOWED_IDS", set())
+        if token_ids is None or not allowed_ids:
+            return valid.clone()
+        mask = torch.zeros_like(valid, dtype=torch.bool)
+        for token_id in allowed_ids:
+            mask |= token_ids == int(token_id)
+        return valid & mask
+
+    def _enforce_boundary_pause_cap(
+        self,
+        values: torch.Tensor,
+        token_ids: Optional[torch.Tensor],
+        valid: torch.Tensor,
+        total: int,
+    ) -> tuple[torch.Tensor, int]:
+        out = values.round().long().clamp_min(0)
+        boundary = self._boundary_pause_mask(token_ids, valid)
+        if not bool(boundary.any()):
+            return out.float(), 0
+        before = out[boundary].clone()
+        out[boundary] = out[boundary].clamp_max(self.boundary_pause_max_frames)
+        clipped = int((before - out[boundary]).clamp_min(0).sum().item())
+        if clipped <= 0:
+            return out.float(), 0
+
+        flexible = self._duration_allocation_mask(token_ids, valid) & (~boundary)
+        if bool(flexible.any()):
+            floors = torch.full(
+                (int(flexible.sum().item()),), self.min_token_frames,
+                device=values.device, dtype=torch.long,
+            )
+            if token_ids is not None:
+                is_pause = token_ids[flexible] == int(SYMBOL2ID.get("<sp>", -999999))
+                floors = torch.where(
+                    is_pause, torch.full_like(floors, self.min_pause_frames), floors
+                )
+            fixed = valid & (~boundary) & (~flexible)
+            flexible_total = int(
+                total - int(out[boundary].sum().item()) - int(out[fixed].sum().item())
+            )
+            out[flexible] = self._largest_remainder(out[flexible], flexible_total, floors)
+        return out.float(), clipped
 
     def _maskgit_take_count(self, pending_count: int, step: int) -> int:
         if step >= self.iterations - 1:
@@ -587,8 +678,8 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
         conditional_fraction = (next_fraction - previous_fraction) / max(1e-8, 1.0 - previous_fraction)
         return max(1, min(int(pending_count), int(math.ceil(conditional_fraction * pending_count))))
 
-    @staticmethod
     def _fit_budget(
+        self,
         values: torch.Tensor,
         confidence: torch.Tensor,
         token_ids: Optional[torch.Tensor],
@@ -596,17 +687,23 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
         total: int,
     ) -> torch.Tensor:
         out = values.round().long().clamp_min(0)
+        boundary = self._boundary_pause_mask(token_ids, valid)
+        out[boundary] = out[boundary].clamp_max(self.boundary_pause_max_frames)
         diff = int(total - int(out[valid].sum()))
         pause_idx = (
             torch.nonzero(valid & (token_ids == int(SYMBOL2ID.get("<sp>", -999999))), as_tuple=False)
             .flatten().tolist()
             if token_ids is not None else []
         )
-        fallback = torch.nonzero(valid, as_tuple=False).flatten().tolist()
+        internal_pause_idx = [i for i in pause_idx if not bool(boundary[i])]
+        fallback = torch.nonzero(
+            self._duration_allocation_mask(token_ids, valid), as_tuple=False
+        ).flatten().tolist()
         if not fallback:
             return out.float()
         if diff > 0:
-            targets = pause_idx or sorted(fallback, key=lambda i: float(confidence[i]))
+            non_boundary = [i for i in fallback if not bool(boundary[i])]
+            targets = internal_pause_idx or sorted(non_boundary, key=lambda i: float(confidence[i])) or fallback
             for step in range(diff):
                 out[targets[step % len(targets)]] += 1
         elif diff < 0:
@@ -662,6 +759,7 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
                     candidates = self._normalize_pending(
                         candidates.float(), token_ids[b] if token_ids is not None else None,
                         valid[b] & (observed[b] == self.mask_class), remaining_total,
+                        full_valid=valid[b],
                     )
                 take = self._maskgit_take_count(int(pending.numel()), step)
                 chosen = pending[torch.topk(conf[b, pending], k=min(take, int(pending.numel()))).indices]
@@ -678,11 +776,25 @@ class MiniDualPathBinsMaskGITDurationPredictor(nn.Module):
                 )
         elif self.budget_mode == "natural":
             decoded = raw
+        boundary_clipped = 0
+        boundary_max = 0.0
+        if self.budget_mode in {"predicted", "external", "legacy"}:
+            for b in range(int(valid.size(0))):
+                ids_b = token_ids[b] if token_ids is not None else None
+                decoded[b], clipped = self._enforce_boundary_pause_cap(
+                    decoded[b], ids_b, valid[b], int(total[b])
+                )
+                boundary_clipped += int(clipped)
+                boundary = self._boundary_pause_mask(ids_b, valid[b])
+                if bool(boundary.any()):
+                    boundary_max = max(boundary_max, float(decoded[b, boundary].max().item()))
         self.last_infer_stats = {
             "pred_total": float(total_float.mean()),
             "raw_ratio": float((raw.sum(1) / total.float().clamp_min(1.0)).mean()),
             "budget_fix": float((decoded - raw).abs().sum(1).mean()),
             "final_ratio": float((decoded.sum(1) / total.float().clamp_min(1.0)).mean()),
+            "boundary_sp_max": float(boundary_max),
+            "boundary_sp_clipped": float(boundary_clipped) / float(max(1, int(valid.size(0)))),
         }
         return decoded * valid.float()
 

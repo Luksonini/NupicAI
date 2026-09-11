@@ -10,10 +10,12 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+import torch
 
 import server
 from auth_store import AuthStore, QuotaExceeded, User
 from translate import parakeet_translation_core as translation_core
+from tts import wegorz_tts_model
 
 
 class PipelineIntegrityTests(unittest.TestCase):
@@ -71,6 +73,28 @@ class PipelineIntegrityTests(unittest.TestCase):
             request = request_type.model_construct()
             self.assertEqual(request.mel_steps_first, 10)
             self.assertEqual(request.mel_steps_second, 0)
+
+    def test_maskgit_boundary_pauses_are_capped_without_losing_budget(self) -> None:
+        predictor = wegorz_tts_model.MiniDualPathBinsMaskGITDurationPredictor(
+            8,
+            layers=0,
+            style_dim=0,
+            boundary_pause_max_frames=16,
+        )
+        sp_id = wegorz_tts_model.SYMBOL2ID["<sp>"]
+        token_ids = torch.tensor([0, 0, 0, sp_id, 11, sp_id, 12, sp_id])
+        valid = torch.ones_like(token_ids, dtype=torch.bool)
+        values = torch.tensor([0.0, 0.0, 0.0, 73.0, 10.0, 20.0, 10.0, 68.0])
+
+        corrected, clipped = predictor._enforce_boundary_pause_cap(
+            values, token_ids, valid, total=181
+        )
+
+        self.assertEqual(int(corrected.sum().item()), 181)
+        self.assertEqual(int(corrected[:3].sum().item()), 0)
+        self.assertLessEqual(int(corrected[3].item()), 16)
+        self.assertLessEqual(int(corrected[-1].item()), 16)
+        self.assertEqual(clipped, 109)
 
     def test_configured_admin_account_is_visible_and_has_unlimited_usage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
