@@ -4,6 +4,8 @@ Zasady wspolnej pracy, branchy i oddzielenia konfiguracji serwera opisuje
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Aktualizacja juz dzialajacego serwera bez
 ponownej instalacji ROCm jest opisana w
 [`deploy/MIGRATE_EXISTING_ROCM_SERVER.md`](deploy/MIGRATE_EXISTING_ROCM_SERVER.md).
+Gotowa instrukcja do wyslania operatorowi serwera znajduje sie w
+[`deploy/BROTHER_GITHUB_SETUP.md`](deploy/BROTHER_GITHUB_SETUP.md).
 
 Hermetyczny folder aplikacji do transkrypcji, tlumaczenia, dubbingu i syntezy glosu z lokalnym ASR Parakeet, lokalnym TTS Wegorz, lokalnym vocoderem Vocos, lokalnym bankiem glosow oraz lokalnym modelem tlumaczenia Wegorz.
 

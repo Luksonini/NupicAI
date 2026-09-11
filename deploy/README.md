@@ -2,6 +2,8 @@
 
 Powiazane instrukcje:
 
+- `BROTHER_GITHUB_SETUP.md` - kompletna instrukcja dla brata: zaproszenie,
+  klucz SSH, klonowanie, migracja lokalnych plikow i modele z pendrive'a;
 - `MIGRATE_EXISTING_ROCM_SERVER.md` - jednorazowe podlaczenie dzialajacego
   serwera brata do repozytorium GitHub bez ponownej konfiguracji ROCm;
 - `AGENT_UPDATE_EXISTING_ROCM_SERVER.md` - bezpieczny runbook dla agenta;
