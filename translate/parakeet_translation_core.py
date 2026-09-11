@@ -421,22 +421,34 @@ def _call_chat_json_api(
         reasoning = str(_CONFIG.get("translation_reasoning_effort", "") or "").strip()
         if reasoning:
             payload["reasoning"] = {"effort": reasoning}
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=float(timeout)) as response:
-            data = json.loads(response.read().decode("utf-8", errors="replace"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"API HTTP {exc.code}: {body[:1000]}") from exc
+    def send(request_payload: dict[str, Any]) -> dict[str, Any]:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=float(timeout)) as response:
+                return json.loads(response.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            unsupported_json_mode = (
+                exc.code == 400
+                and "response_format" in body
+                and ("not implemented" in body.lower() or "unsupported" in body.lower())
+            )
+            if unsupported_json_mode and "response_format" in request_payload:
+                fallback_payload = dict(request_payload)
+                fallback_payload.pop("response_format", None)
+                return send(fallback_payload)
+            raise RuntimeError(f"API HTTP {exc.code}: {body[:1000]}") from exc
+
+    data = send(payload)
     message = data["choices"][0]["message"]
     return str(message.get("content") or message.get("reasoning_content") or "")
 

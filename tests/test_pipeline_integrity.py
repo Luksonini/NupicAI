@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+import io
 import json
 import os
 import sqlite3
 import tempfile
+import urllib.error
 from unittest import mock
 from pathlib import Path
 
@@ -19,6 +21,45 @@ from tts import wegorz_tts_model
 
 
 class PipelineIntegrityTests(unittest.TestCase):
+    def test_json_translation_retries_without_unsupported_response_format(self) -> None:
+        body = (
+            b'{"error":{"message":"response_format json_object is not implemented"}}'
+        )
+        unsupported = urllib.error.HTTPError(
+            "https://example.invalid/v1/chat/completions",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(body),
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"choices":[{"message":{"content":"{\\"segments\\":[]}"}}]}'
+        )
+        old_config = translation_core._CONFIG
+        translation_core._CONFIG = {"translation_disable_thinking": True}
+        try:
+            with mock.patch.object(
+                translation_core.urllib.request,
+                "urlopen",
+                side_effect=[unsupported, response],
+            ) as urlopen:
+                result = translation_core._call_chat_json_api(
+                    endpoint="https://example.invalid/v1",
+                    api_key="test-key",
+                    model="test-model",
+                    messages=[{"role": "user", "content": "Return JSON"}],
+                    temperature=0.0,
+                    timeout=5.0,
+                )
+        finally:
+            translation_core._CONFIG = old_config
+        self.assertEqual(result, '{"segments":[]}')
+        first_payload = json.loads(urlopen.call_args_list[0].args[0].data)
+        second_payload = json.loads(urlopen.call_args_list[1].args[0].data)
+        self.assertIn("response_format", first_payload)
+        self.assertNotIn("response_format", second_payload)
+
     def test_dictation_polish_preserves_language_and_uses_deterministic_request(self) -> None:
         with mock.patch.object(
             translation_core,

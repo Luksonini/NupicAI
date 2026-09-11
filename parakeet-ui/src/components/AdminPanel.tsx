@@ -108,6 +108,7 @@ export default function AdminPanel() {
             <input list="translation-models" value={form.translation_model}
               onChange={e => setForm(v => ({ ...v, translation_model: e.target.value }))} />
             <datalist id="translation-models">
+              <option value="qwen3.8-flash-next" />
               <option value="qwen3.8:27b-mtp" />
               <option value="qwen3.5:35b-mtp" />
             </datalist>
@@ -181,7 +182,7 @@ export default function AdminPanel() {
             <StatusRow label="API tłumaczeń" ok={settings.translation_api_key_configured} icon={<KeyRound size={15} />} />
           </div>
           <div className="meta-row"><span>Domyślny profil TTS</span><strong>{settings.tts_profile}</strong></div>
-          <div className="meta-row"><span>Aktywny daemon</span><strong>{settings.tts_active_profile}</strong></div>
+          <div className="meta-row"><span>Aktywny model TTS</span><strong>{settings.tts_active_profile}</strong></div>
           <div className="meta-row"><span>Modele w pamięci</span><strong>{settings.tts_loaded_profiles.length}</strong></div>
           <div className="meta-row"><span>Konta użytkowników</span><strong>{settings.registered_users}</strong></div>
           <div className="meta-row"><span>Aktywne sesje</span><strong>{settings.active_sessions}</strong></div>

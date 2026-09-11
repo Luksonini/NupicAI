@@ -851,7 +851,7 @@ core._CONFIG = {
     "asr_window_overlap_seconds": float(os.environ.get("PARAKEET_ASR_OVERLAP_SEC", "2.0")),
     "asr_wordseg_max_chars": 180,
     "translation_endpoint": os.environ.get("TRANSLATION_ENDPOINT", "https://ai.nupic.homes/v1"),
-    "translation_model": os.environ.get("TRANSLATION_MODEL", "qwen3.5:35b-mtp"),
+    "translation_model": os.environ.get("TRANSLATION_MODEL", "qwen3.8-flash-next"),
     "translation_mode": os.environ.get("TRANSLATION_MODE", "qwen_mtp_35b_json_overlap"),
     "translation_batch_segments": int(os.environ.get("TRANSLATION_BATCH_SEGMENTS", "8")),
     "translation_api_key": "",
@@ -1643,7 +1643,7 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
         _push(job, {"type": "progress", "progress": 0.05, "message": "Inicjalizuję tłumaczenie…"})
         _validate_segment_timeline(req.segments, stage="tłumaczenie")
 
-        selected_model = str(req.model or core._CONFIG.get("translation_model", "qwen3.5:35b-mtp"))
+        selected_model = str(req.model or core._CONFIG.get("translation_model", "qwen3.8-flash-next"))
         selected_mode = str(req.mode or core._CONFIG.get("translation_mode", "qwen_mtp_35b_json_overlap"))
         selected_batch = int(req.batch_segments or core._CONFIG.get("translation_batch_segments", 8))
         env_key_name = "GEMINI_API_KEY" if selected_model.startswith("gemini") else "NUPIC_API_KEY"
@@ -1655,7 +1655,7 @@ def _worker_translate(job: Job, req: TranslateRequest) -> None:
         t0 = time.perf_counter()
         n = len(req.segments)
         _push(job, {"type": "progress", "progress": 0.1,
-                    "message": f"Tłumaczę {n} segmentów (tryb={req.mode})…"})
+                    "message": f"Tłumaczę {n} segmentów modelem {selected_model}…"})
         if req.mode == "wegorz_local_sentence_split":
             _push(job, {
                 "type": "progress",
@@ -2683,7 +2683,7 @@ async def polish_dictation(
         raise HTTPException(status_code=400, detail="Brak tekstu do poprawienia")
     if len(text) > 12_000:
         raise HTTPException(status_code=413, detail="Tekst dyktowania jest zbyt długi")
-    model = str(core._CONFIG.get("translation_model", "qwen3.5:35b-mtp"))
+    model = str(core._CONFIG.get("translation_model", "qwen3.8-flash-next"))
     env_key_name = "GEMINI_API_KEY" if model.startswith("gemini") else "NUPIC_API_KEY"
     key = os.environ.get(env_key_name, "").strip() or str(core._CONFIG.get("translation_api_key", "")).strip()
     try:
@@ -2795,7 +2795,7 @@ def _worker_tts_text(job: Job, req: TextTTSRequest) -> None:
         out_dir = _job_work_dir(job) / "tts"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        _push(job, {"type": "progress", "progress": 0.15, "message": "Syntetyzuję (czeka na daemon)…"})
+        _push(job, {"type": "progress", "progress": 0.15, "message": "Przygotowuję model głosu…"})
 
         tag = f"tts_{job.id[:8]}"
         synth_resp = _daemon_synth_chunked_response(
