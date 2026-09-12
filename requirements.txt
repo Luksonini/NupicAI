@@ -3,6 +3,7 @@
 torch==2.9.1
 torchaudio==2.9.1
 nemo_toolkit[asr]==2.7.3
+nemo_text_processing==1.1.0
 vocos==0.1.0
 fastapi==0.115.12
 python-multipart==0.0.20

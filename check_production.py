@@ -33,6 +33,7 @@ REQUIRED_PACKAGES = (
     "torch",
     "torchaudio",
     "nemo_toolkit",
+    "nemo_text_processing",
     "vocos",
     "fastapi",
     "python-multipart",
