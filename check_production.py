@@ -35,6 +35,7 @@ REQUIRED_PACKAGES = (
     "nemo_toolkit",
     "vocos",
     "fastapi",
+    "python-multipart",
     "uvicorn",
     "pydantic",
     "numpy",
